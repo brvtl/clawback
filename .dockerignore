@@ -1,0 +1,45 @@
+# Dependencies
+node_modules
+**/node_modules
+
+# Build outputs
+dist
+**/dist
+.svelte-kit
+
+# Development files
+*.test.ts
+*.spec.ts
+vitest.config.ts
+.eslintrc.cjs
+.prettierrc
+.prettierignore
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Misc
+*.log
+*.db
+.env
+.env.*
+!.env.example
+coverage
+.nyc_output
+
+# Web app (not needed for daemon image)
+apps/web
+
+# Documentation
+*.md
+!README.md
+
+# Husky
+.husky
