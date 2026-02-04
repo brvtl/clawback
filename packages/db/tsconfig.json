@@ -3,11 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "noEmit": false,
-    "baseUrl": ".",
-    "paths": {
-      "@clawback/shared": ["../shared/src/index.ts"]
-    }
+    "noEmit": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
