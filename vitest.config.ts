@@ -1,6 +1,13 @@
 import { defineConfig } from "vitest/config";
+import { resolve } from "path";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@clawback/shared": resolve(__dirname, "packages/shared/src/index.ts"),
+      "@clawback/db": resolve(__dirname, "packages/db/src/index.ts"),
+    },
+  },
   test: {
     globals: true,
     environment: "node",
