@@ -185,4 +185,62 @@ export class McpManager {
   getServerStatus(name: string): McpServerInstance["status"] | null {
     return this.servers.get(name)?.status ?? null;
   }
+
+  /**
+   * Call a tool on an MCP server.
+   * Tool name format: "server:method" (e.g., "github:get_repo")
+   */
+  callTool(
+    toolName: string,
+    input: Record<string, unknown>,
+    permissions: ToolPermissions
+  ): Record<string, unknown> {
+    // Check permissions first
+    if (!this.isToolAllowed(toolName, permissions)) {
+      throw new Error(`Tool ${toolName} is not allowed by skill permissions`);
+    }
+
+    const serverName = this.extractServerName(toolName);
+    if (!serverName) {
+      throw new Error(`Invalid tool name format: ${toolName}. Expected "server:method"`);
+    }
+
+    const instance = this.servers.get(serverName);
+    if (!instance) {
+      throw new Error(`MCP server ${serverName} not registered`);
+    }
+
+    if (instance.status !== "running") {
+      throw new Error(`MCP server ${serverName} is not running (status: ${instance.status})`);
+    }
+
+    const methodName = this.extractMethodName(toolName);
+
+    // TODO: Implement actual MCP protocol communication here
+    // For now, return a placeholder response indicating the tool was called
+    // The actual implementation would use @modelcontextprotocol/sdk to:
+    // 1. Send JSON-RPC request to the MCP server process
+    // 2. Wait for response
+    // 3. Return the result or throw on error
+
+    return {
+      _mcpToolCall: true,
+      server: serverName,
+      method: methodName,
+      input,
+      result: `Tool ${toolName} called successfully`,
+    };
+  }
+
+  /**
+   * Register and start all MCP servers for a skill.
+   */
+  setupServersForSkill(mcpServers: Record<string, McpServerConfig>): void {
+    for (const [name, config] of Object.entries(mcpServers)) {
+      if (!this.hasServer(name)) {
+        this.registerServer(name, config);
+      }
+      this.startServer(name);
+    }
+  }
 }

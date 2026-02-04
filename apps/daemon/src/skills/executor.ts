@@ -1,10 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { generateToolCallId, type Skill, type Event } from "@clawback/shared";
 import type { RunRepository, NotificationRepository, Run } from "@clawback/db";
+import { McpManager, type ToolPermissions } from "../mcp/manager.js";
 
 export interface ExecutorDependencies {
   runRepo: RunRepository;
   notifRepo: NotificationRepository;
+  mcpManager: McpManager;
   anthropicApiKey?: string;
 }
 
@@ -27,10 +29,12 @@ export class SkillExecutor {
   private anthropic: Anthropic | null = null;
   private runRepo: RunRepository;
   private notifRepo: NotificationRepository;
+  private mcpManager: McpManager;
 
   constructor(deps: ExecutorDependencies) {
     this.runRepo = deps.runRepo;
     this.notifRepo = deps.notifRepo;
+    this.mcpManager = deps.mcpManager;
 
     if (deps.anthropicApiKey) {
       this.anthropic = new Anthropic({ apiKey: deps.anthropicApiKey });
@@ -108,6 +112,17 @@ export class SkillExecutor {
       };
     }
 
+    // Setup MCP servers if the skill has any configured
+    if (skill.mcpServers && Object.keys(skill.mcpServers).length > 0) {
+      this.mcpManager.setupServersForSkill(skill.mcpServers);
+    }
+
+    // Build tool permissions from skill config
+    const toolPermissions: ToolPermissions = {
+      allow: skill.toolPermissions?.allow ?? [],
+      deny: skill.toolPermissions?.deny ?? [],
+    };
+
     const systemPrompt = this.buildSystemPrompt(skill, event);
     const toolCalls: ToolCallResult[] = [];
 
@@ -151,8 +166,8 @@ export class SkillExecutor {
           let error: string | null = null;
 
           try {
-            // TODO: Actually call MCP tools here
-            output = { message: `Tool ${toolName} executed` };
+            // Call tool through MCP manager
+            output = this.mcpManager.callTool(toolName, toolInput, toolPermissions);
           } catch (e) {
             error = e instanceof Error ? e.message : "Tool execution failed";
           }

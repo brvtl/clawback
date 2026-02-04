@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SkillExecutor, type ExecutorDependencies } from "./executor.js";
 import type { Skill, Event } from "@clawback/shared";
 import type { RunRepository, NotificationRepository } from "@clawback/db";
+import { McpManager } from "../mcp/manager.js";
 
 describe("SkillExecutor", () => {
   let executor: SkillExecutor;
@@ -66,6 +67,7 @@ describe("SkillExecutor", () => {
     mockDeps = {
       runRepo: mockRunRepo as RunRepository,
       notifRepo: mockNotifRepo as NotificationRepository,
+      mcpManager: new McpManager(),
       anthropicApiKey: "test-api-key",
     };
 
