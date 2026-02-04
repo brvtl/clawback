@@ -35,6 +35,33 @@ module.exports = {
         parser: "@typescript-eslint/parser",
       },
       extends: ["plugin:svelte/recommended"],
+      env: {
+        browser: true,
+      },
+      rules: {
+        // Relax type checking for Svelte templates
+        "@typescript-eslint/no-unsafe-assignment": "off",
+        "@typescript-eslint/no-unsafe-member-access": "off",
+        "@typescript-eslint/no-unsafe-call": "off",
+        "@typescript-eslint/no-unsafe-return": "off",
+        "@typescript-eslint/no-unsafe-argument": "off",
+        "@typescript-eslint/no-redundant-type-constituents": "off",
+      },
+    },
+    {
+      files: ["apps/web/**/*.ts"],
+      env: {
+        browser: true,
+      },
+      rules: {
+        // Relax type checking for web app due to Svelte integration
+        "@typescript-eslint/no-unsafe-assignment": "off",
+        "@typescript-eslint/no-unsafe-member-access": "off",
+        "@typescript-eslint/no-unsafe-call": "off",
+        "@typescript-eslint/no-unsafe-return": "off",
+        "@typescript-eslint/no-unsafe-argument": "off",
+        "@typescript-eslint/no-redundant-type-constituents": "off",
+      },
     },
     {
       files: ["*.test.ts", "*.spec.ts"],
