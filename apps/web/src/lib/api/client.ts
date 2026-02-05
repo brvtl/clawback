@@ -45,7 +45,9 @@ export interface ApiSkill {
     schedule?: string;
     filters?: { repository?: string; ref?: string[] };
   }>;
-  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  mcpServers?:
+    | string[]
+    | Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
   toolPermissions?: { allow?: string[]; deny?: string[] };
   notifications?: { onComplete?: boolean; onError?: boolean };
   knowledge?: string[];
@@ -129,6 +131,29 @@ class ApiClient {
     return this.fetch<{ skill: ApiSkill }>(`/api/skills/${id}`, {
       method: "PUT",
       body: JSON.stringify(updates),
+    });
+  }
+
+  async createSkill(input: {
+    name: string;
+    description?: string;
+    instructions: string;
+    triggers: Array<{
+      source: string;
+      events?: string[];
+      schedule?: string;
+      filters?: { repository?: string; ref?: string[] };
+    }>;
+    mcpServers?:
+      | string[]
+      | Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+    toolPermissions?: { allow?: string[]; deny?: string[] };
+    notifications?: { onComplete?: boolean; onError?: boolean };
+    knowledge?: string[];
+  }): Promise<{ skill: ApiSkill }> {
+    return this.fetch<{ skill: ApiSkill }>("/api/skills", {
+      method: "POST",
+      body: JSON.stringify(input),
     });
   }
 

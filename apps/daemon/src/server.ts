@@ -17,6 +17,7 @@ import { McpManager } from "./mcp/manager.js";
 import { NotificationService } from "./services/notifications.js";
 import { registerWebhookRoutes } from "./routes/webhook.js";
 import { registerApiRoutes } from "./routes/api.js";
+import { registerBuilderRoutes } from "./routes/builder.js";
 
 export interface ServerContext {
   db: DatabaseConnection;
@@ -148,6 +149,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Register routes
   registerWebhookRoutes(server, context);
   registerApiRoutes(server, context);
+  registerBuilderRoutes(server, context);
 
   // Register WebSocket route for real-time notifications
   server.get("/ws", { websocket: true }, (socket) => {
