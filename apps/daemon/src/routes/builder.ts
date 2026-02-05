@@ -1,6 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import Anthropic from "@anthropic-ai/sdk";
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ServerContext } from "../server.js";
 
 interface BuilderAction {
@@ -24,11 +23,105 @@ interface ChatResponse {
   actions: BuilderAction[] | undefined;
 }
 
+// Tools the builder can use to query Clawback
+const BUILDER_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "list_skills",
+    description: "List all configured skills with their triggers and MCP servers",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "get_skill",
+    description: "Get full details of a specific skill including instructions",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        skill_id: {
+          type: "string",
+          description: "The skill ID to get details for",
+        },
+      },
+      required: ["skill_id"],
+    },
+  },
+  {
+    name: "list_mcp_servers",
+    description: "List all configured MCP servers with their commands and status",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "list_events",
+    description: "List recent events received by Clawback",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        limit: {
+          type: "number",
+          description: "Maximum number of events to return (default 10)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_runs",
+    description: "List recent skill execution runs",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        limit: {
+          type: "number",
+          description: "Maximum number of runs to return (default 10)",
+        },
+        skill_id: {
+          type: "string",
+          description: "Filter runs by skill ID (optional)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_run",
+    description: "Get details of a specific run including tool calls and output",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        run_id: {
+          type: "string",
+          description: "The run ID to get details for",
+        },
+      },
+      required: ["run_id"],
+    },
+  },
+];
+
 const BUILDER_SYSTEM_PROMPT = `You are a helpful assistant for Clawback, an event-driven automation engine powered by Claude.
 
 ## Your Role
 
 Help users create automated workflows (skills) that respond to events from ANY source - GitHub, Slack, email, custom webhooks, scheduled tasks, and more. You understand the full integration landscape and guide users through setup.
+
+## Tools Available
+
+You have tools to query the Clawback system:
+- **list_skills**: See all configured skills
+- **get_skill**: Get full details of a skill (including instructions)
+- **list_mcp_servers**: See configured MCP servers
+- **list_events**: See recent events received
+- **list_runs**: See recent skill executions
+- **get_run**: Get details of a specific run
+
+Use these tools to understand the current state before making changes!
 
 ## Clawback Architecture
 
@@ -81,7 +174,7 @@ Clawback receives events via webhook endpoints:
 - **Trigger events**: message, app_mention, reaction_added, file_shared, etc.
 
 ### Email (IMAP/SMTP)
-- **MCP Server**: Custom or use \`npx -y @modelcontextprotocol/server-email\`
+- **MCP Server**: Custom or use email MCP server
 - **Credentials**: IMAP_HOST, IMAP_USER, IMAP_PASSWORD, SMTP_HOST, etc.
 - **Webhook setup**: Use a polling service or email-to-webhook bridge
 - **Trigger events**: email_received, email_sent
@@ -124,49 +217,23 @@ When creating/updating resources, include actions at the END of your response:
 
 ## Guidelines
 
-1. **Understand the use case first** - Ask what they want to automate, what triggers it, what actions to take
-2. **Check existing MCP servers** - Look at "Available MCP Servers" in context before creating new ones
-3. **Collect credentials** - Ask for tokens/keys BEFORE creating resources
-4. **Explain webhook setup** - Always tell users how to configure the event source to send webhooks
-5. **Write detailed instructions** - The skill instructions should be comprehensive and specific
-6. **Suggest appropriate tools** - Recommend the right MCP servers for the job
+1. **Use tools to understand current state** - Always check what exists before suggesting changes
+2. **Understand the use case first** - Ask what they want to automate
+3. **Check existing MCP servers** - Use list_mcp_servers before creating new ones
+4. **Collect credentials** - Ask for tokens/keys BEFORE creating resources
+5. **Explain webhook setup** - Always tell users how to configure the event source
+6. **Write detailed instructions** - Skill instructions should be comprehensive
 7. **Consider the full flow** - Event → Trigger → Tools → Actions → Notifications
 
 ## Conversation Flow
 
-1. **Understand**: "What would you like to automate?"
-2. **Clarify**: Ask about triggers, actions, and any specifics
-3. **Check**: Review what MCP servers exist vs. what's needed
+1. **Query**: Use tools to check what's already configured
+2. **Understand**: "What would you like to automate?"
+3. **Clarify**: Ask about triggers, actions, and specifics
 4. **Collect**: Ask for any missing credentials
 5. **Create**: Set up MCP server(s) and skill together
-6. **Explain**: Tell them how to configure webhooks on the source system
-7. **Verify**: Suggest how to test the integration
-
-## Example Interactions
-
-**GitHub PR Reviews:**
-User: "Auto-review my PRs"
-→ Ask: Which repo? Do you have a GitHub token?
-→ Create: github MCP server + PR review skill
-→ Explain: How to add webhook to repo
-
-**Slack Notifications:**
-User: "Notify me in Slack when builds fail"
-→ Ask: Which Slack channel? What triggers a "failed build"? Do you have Slack bot token?
-→ Create: slack MCP server + notification skill
-→ Explain: How to configure Slack app & event subscriptions
-
-**Scheduled Reports:**
-User: "Send me a daily summary email"
-→ Ask: What data to summarize? What time? Email config?
-→ Create: email MCP server + scheduled skill with cron trigger
-→ Explain: No webhook needed for scheduled tasks
-
-**Custom Integration:**
-User: "When a new order comes in from Shopify, update my inventory spreadsheet"
-→ Ask: Shopify webhook details? Google Sheets API key?
-→ Create: google-sheets MCP server + order processing skill
-→ Explain: How to configure Shopify webhook to POST to /webhook/shopify`;
+6. **Explain**: Tell them how to configure webhooks
+7. **Verify**: Suggest how to test the integration`;
 
 export function registerBuilderRoutes(server: FastifyInstance, context: ServerContext): void {
   server.post<{ Body: ChatRequest }>(
@@ -174,36 +241,91 @@ export function registerBuilderRoutes(server: FastifyInstance, context: ServerCo
     async (request: FastifyRequest<{ Body: ChatRequest }>, reply: FastifyReply) => {
       const { message, context: userContext, history } = request.body;
 
-      // Build the full prompt
-      const historyText = history
-        .slice(-8)
-        .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
-        .join("\n\n");
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        return reply.status(500).send({
+          error: "ANTHROPIC_API_KEY required for builder (tool use not supported in SDK mode)",
+        });
+      }
 
-      const fullPrompt = `${BUILDER_SYSTEM_PROMPT}\n\n---\n\n${userContext}\n\n---\n\nConversation history:\n${historyText}\n\nUser request: ${message}`;
+      const anthropic = new Anthropic({ apiKey });
+
+      // Build messages from history
+      const messages: Anthropic.MessageParam[] = [];
+      for (const msg of history.slice(-10)) {
+        messages.push({
+          role: msg.role,
+          content: msg.content,
+        });
+      }
+
+      // Add current message with context
+      messages.push({
+        role: "user",
+        content: `Current system state:\n${userContext}\n\n---\n\nUser: ${message}`,
+      });
 
       try {
-        // Try SDK first (doesn't require API key)
-        let fullResponse: string;
+        // Run agentic loop with tools
+        let continueLoop = true;
+        let finalResponse = "";
 
-        try {
-          fullResponse = await runWithSdk(fullPrompt);
-        } catch (sdkError) {
-          // Fall back to API if SDK fails and API key is available
-          const apiKey = process.env.ANTHROPIC_API_KEY;
-          if (apiKey) {
-            console.warn("SDK failed, falling back to API:", sdkError);
-            fullResponse = await runWithApi(fullPrompt, apiKey, history);
+        while (continueLoop) {
+          const response = await anthropic.messages.create({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 4096,
+            system: BUILDER_SYSTEM_PROMPT,
+            tools: BUILDER_TOOLS,
+            messages,
+          });
+
+          // Check for tool use
+          const toolUseBlocks = response.content.filter(
+            (block) => block.type === "tool_use"
+          ) as Array<{ type: "tool_use"; id: string; name: string; input: unknown }>;
+
+          if (toolUseBlocks.length > 0) {
+            // Process tool calls
+            const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+            for (const toolUse of toolUseBlocks) {
+              const result = await handleToolCall(
+                toolUse.name,
+                toolUse.input as Record<string, unknown>,
+                context
+              );
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: toolUse.id,
+                content: JSON.stringify(result, null, 2),
+              });
+            }
+
+            // Add assistant message and tool results
+            messages.push({ role: "assistant", content: response.content });
+            messages.push({ role: "user", content: toolResults });
           } else {
-            throw new Error(
-              "Claude SDK failed and no ANTHROPIC_API_KEY configured. " +
-                "Either run Claude Code or set ANTHROPIC_API_KEY."
+            // No tool use, extract final response
+            const textBlocks = response.content.filter(
+              (block): block is Anthropic.TextBlock => block.type === "text"
             );
+            finalResponse = textBlocks.map((b) => b.text).join("\n");
+            continueLoop = false;
+          }
+
+          // Check stop reason
+          if (response.stop_reason === "end_turn" && toolUseBlocks.length === 0) {
+            continueLoop = false;
+          }
+
+          // Safety limit
+          if (messages.length > 30) {
+            continueLoop = false;
           }
         }
 
         // Parse actions from response
-        const { text, actions } = parseActionsFromResponse(fullResponse);
+        const { text, actions } = parseActionsFromResponse(finalResponse);
 
         // Execute actions
         const executedActions: BuilderAction[] = [];
@@ -232,63 +354,92 @@ export function registerBuilderRoutes(server: FastifyInstance, context: ServerCo
   );
 }
 
-async function runWithSdk(prompt: string): Promise<string> {
-  let finalResponse = "";
-
-  const q = query({
-    prompt,
-    options: {
-      model: "claude-sonnet-4-20250514",
-    },
-  });
-
-  for await (const message of q) {
-    if (message.type === "assistant") {
-      const content = (message as { message: { content: unknown } }).message.content;
-      if (Array.isArray(content)) {
-        for (const block of content as Array<{ type: string; text?: string }>) {
-          if (block.type === "text" && block.text) {
-            finalResponse += block.text;
-          }
-        }
-      }
-    } else if (message.type === "result") {
-      const resultMsg = message as { result?: unknown };
-      if (resultMsg.result) {
-        finalResponse = String(resultMsg.result);
-      }
+async function handleToolCall(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: ServerContext
+): Promise<unknown> {
+  switch (toolName) {
+    case "list_skills": {
+      const skills = context.skillRegistry.listSkills();
+      return skills.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        triggers: s.triggers,
+        mcpServers: s.mcpServers,
+        notifications: s.notifications,
+      }));
     }
+
+    case "get_skill": {
+      const skillId = input.skill_id as string;
+      const skill = context.skillRegistry.getSkill(skillId);
+      if (!skill) {
+        return { error: `Skill ${skillId} not found` };
+      }
+      return skill;
+    }
+
+    case "list_mcp_servers": {
+      const servers = context.mcpServerRepo.findAll();
+      return servers.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        command: s.command,
+        args: s.args,
+        enabled: s.enabled,
+        // Don't expose env values (contain secrets)
+        hasEnvVars: Object.keys(s.env).length > 0,
+        envKeys: Object.keys(s.env),
+      }));
+    }
+
+    case "list_events": {
+      const limit = (input.limit as number) || 10;
+      const events = await context.eventRepo.list({ limit, offset: 0 });
+      return events.map((e) => ({
+        id: e.id,
+        source: e.source,
+        type: e.type,
+        status: e.status,
+        createdAt: new Date(e.createdAt).toISOString(),
+      }));
+    }
+
+    case "list_runs": {
+      const limit = (input.limit as number) || 10;
+      const skillId = input.skill_id as string | undefined;
+      const runs = await context.runRepo.list({ limit, offset: 0, skillId });
+      return runs.map((r) => ({
+        id: r.id,
+        skillId: r.skillId,
+        eventId: r.eventId,
+        status: r.status,
+        error: r.error,
+        startedAt: r.startedAt ? new Date(r.startedAt).toISOString() : null,
+        completedAt: r.completedAt ? new Date(r.completedAt).toISOString() : null,
+      }));
+    }
+
+    case "get_run": {
+      const runId = input.run_id as string;
+      const run = await context.runRepo.findById(runId);
+      if (!run) {
+        return { error: `Run ${runId} not found` };
+      }
+      return {
+        ...run,
+        input: run.input ? (JSON.parse(run.input) as unknown) : null,
+        output: run.output ? (JSON.parse(run.output) as unknown) : null,
+        toolCalls: run.toolCalls ? (JSON.parse(run.toolCalls) as unknown[]) : [],
+      };
+    }
+
+    default:
+      return { error: `Unknown tool: ${toolName}` };
   }
-
-  return finalResponse;
-}
-
-async function runWithApi(prompt: string, apiKey: string, history: ChatMessage[]): Promise<string> {
-  const anthropic = new Anthropic({ apiKey });
-
-  // Build messages
-  const messages: Anthropic.MessageParam[] = [];
-  for (const msg of history.slice(-8)) {
-    messages.push({
-      role: msg.role,
-      content: msg.content,
-    });
-  }
-  messages.push({
-    role: "user",
-    content: prompt,
-  });
-
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 4096,
-    messages,
-  });
-
-  const textBlocks = response.content.filter(
-    (block): block is Anthropic.TextBlock => block.type === "text"
-  );
-  return textBlocks.map((b) => b.text).join("\n");
 }
 
 function parseActionsFromResponse(response: string): { text: string; actions: BuilderAction[] } {
@@ -355,7 +506,7 @@ function executeAction(action: BuilderAction, context: ServerContext): void {
         throw new Error("update_skill requires an id");
       }
       const { id: _id, ...updates } = action.data;
-      void _id; // Suppress unused variable warning
+      void _id;
       context.skillRegistry.updateSkill(idValue, updates);
       break;
     }
@@ -369,13 +520,11 @@ function executeAction(action: BuilderAction, context: ServerContext): void {
         env?: Record<string, string>;
       };
 
-      // Check if server with this name already exists
       const existing = context.mcpServerRepo.findByName(data.name);
       if (existing) {
         throw new Error(`MCP server with name "${data.name}" already exists`);
       }
 
-      // Build input without explicit undefined values
       const createInput: Parameters<typeof context.mcpServerRepo.create>[0] = {
         name: data.name,
         command: data.command,
@@ -394,7 +543,7 @@ function executeAction(action: BuilderAction, context: ServerContext): void {
         throw new Error("update_mcp_server requires an id");
       }
       const { id: _id, ...updates } = action.data;
-      void _id; // Suppress unused variable warning
+      void _id;
       context.mcpServerRepo.update(idValue, updates);
       break;
     }
