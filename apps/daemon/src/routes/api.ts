@@ -97,6 +97,65 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
     }
   );
 
+  // Update skill
+  server.put<{ Params: { id: string } }>(
+    "/api/skills/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const existing = context.skillRegistry.getSkill(request.params.id);
+      if (!existing) {
+        return reply.status(404).send({ error: "Skill not found" });
+      }
+
+      const body = request.body as {
+        name?: string;
+        description?: string;
+        instructions?: string;
+        triggers?: Array<{
+          source: string;
+          events?: string[];
+          schedule?: string;
+          filters?: { repository?: string; ref?: string[] };
+        }>;
+        mcpServers?: Record<
+          string,
+          { command: string; args?: string[]; env?: Record<string, string> }
+        >;
+        toolPermissions?: { allow?: string[]; deny?: string[] };
+        notifications?: { onComplete?: boolean; onError?: boolean };
+        knowledge?: string[];
+      };
+
+      const skill = context.skillRegistry.updateSkill(request.params.id, {
+        name: body.name,
+        description: body.description,
+        instructions: body.instructions,
+        triggers: body.triggers,
+        mcpServers: body.mcpServers,
+        toolPermissions: body.toolPermissions,
+        notifications: body.notifications,
+        knowledge: body.knowledge,
+      });
+
+      if (!skill) {
+        return reply.status(404).send({ error: "Skill not found" });
+      }
+
+      return reply.send({ skill });
+    }
+  );
+
+  // Delete skill
+  server.delete<{ Params: { id: string } }>(
+    "/api/skills/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const deleted = context.skillRegistry.deleteSkill(request.params.id);
+      if (!deleted) {
+        return reply.status(404).send({ error: "Skill not found" });
+      }
+      return reply.send({ success: true });
+    }
+  );
+
   // List runs
   server.get<{ Querystring: ListParams & { skillId?: string } }>(
     "/api/runs",

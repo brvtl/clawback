@@ -105,6 +105,22 @@ class ApiClient {
     return this.fetch<{ skill: ApiSkill }>(`/api/skills/${id}`);
   }
 
+  async updateSkill(
+    id: string,
+    updates: Partial<Omit<ApiSkill, "id">>
+  ): Promise<{ skill: ApiSkill }> {
+    return this.fetch<{ skill: ApiSkill }>(`/api/skills/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteSkill(id: string): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(`/api/skills/${id}`, {
+      method: "DELETE",
+    });
+  }
+
   async getRuns(params?: {
     limit?: number;
     offset?: number;
