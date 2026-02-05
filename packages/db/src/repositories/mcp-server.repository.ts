@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { mcpServers, type DbMcpServer } from "../schema.js";
 import type { DatabaseConnection } from "../connection.js";
+import { encryptEnv, decryptEnv } from "../crypto.js";
 
 export interface McpServerConfig {
   command: string;
@@ -47,13 +48,14 @@ export class McpServerRepository {
   constructor(private db: DatabaseConnection) {}
 
   private toDomain(dbServer: DbMcpServer): McpServer {
+    const encryptedEnv = JSON.parse(dbServer.env) as Record<string, string>;
     return {
       id: dbServer.id,
       name: dbServer.name,
       description: dbServer.description ?? undefined,
       command: dbServer.command,
       args: JSON.parse(dbServer.args) as string[],
-      env: JSON.parse(dbServer.env) as Record<string, string>,
+      env: decryptEnv(encryptedEnv),
       enabled: dbServer.enabled,
       createdAt: dbServer.createdAt,
       updatedAt: dbServer.updatedAt,
@@ -64,13 +66,16 @@ export class McpServerRepository {
     const id = generateMcpServerId();
     const now = Date.now();
 
+    // Encrypt env values before storing
+    const encryptedEnv = input.env ? encryptEnv(input.env) : {};
+
     const dbServer: typeof mcpServers.$inferInsert = {
       id,
       name: input.name,
       description: input.description,
       command: input.command,
       args: JSON.stringify(input.args ?? []),
-      env: JSON.stringify(input.env ?? {}),
+      env: JSON.stringify(encryptedEnv),
       enabled: true,
       createdAt: now,
       updatedAt: now,
@@ -114,7 +119,7 @@ export class McpServerRepository {
     if (input.description !== undefined) updates.description = input.description;
     if (input.command !== undefined) updates.command = input.command;
     if (input.args !== undefined) updates.args = JSON.stringify(input.args);
-    if (input.env !== undefined) updates.env = JSON.stringify(input.env);
+    if (input.env !== undefined) updates.env = JSON.stringify(encryptEnv(input.env));
     if (input.enabled !== undefined) updates.enabled = input.enabled;
 
     this.db.update(mcpServers).set(updates).where(eq(mcpServers.id, id)).run();
