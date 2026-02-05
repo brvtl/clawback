@@ -250,7 +250,7 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       name: string;
       description?: string;
       command: string;
-      args?: string[];
+      args?: string[] | string;
       env?: Record<string, string>;
     };
 
@@ -262,11 +262,19 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         .send({ error: `MCP server with name "${body.name}" already exists` });
     }
 
+    // Normalize args to array (handle string input from builder)
+    let args: string[] | undefined;
+    if (typeof body.args === "string") {
+      args = body.args.trim() ? body.args.trim().split(/\s+/) : [];
+    } else {
+      args = body.args;
+    }
+
     const server = context.mcpServerRepo.create({
       name: body.name,
       description: body.description,
       command: body.command,
-      args: body.args,
+      args,
       env: body.env,
     });
 
@@ -286,7 +294,7 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         name?: string;
         description?: string;
         command?: string;
-        args?: string[];
+        args?: string[] | string;
         env?: Record<string, string>;
         enabled?: boolean;
       };
@@ -301,7 +309,18 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         }
       }
 
-      const updated = context.mcpServerRepo.update(request.params.id, body);
+      // Normalize args to array (handle string input from builder)
+      let args: string[] | undefined;
+      if (typeof body.args === "string") {
+        args = body.args.trim() ? body.args.trim().split(/\s+/) : [];
+      } else {
+        args = body.args;
+      }
+
+      const updated = context.mcpServerRepo.update(request.params.id, {
+        ...body,
+        args,
+      });
       return reply.send({ server: updated });
     }
   );
