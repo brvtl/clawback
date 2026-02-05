@@ -4,6 +4,7 @@
 
   const navItems = [
     { href: "/", label: "Dashboard", icon: "home" },
+    { href: "/builder", label: "Builder", icon: "wand" },
     { href: "/skills", label: "Skills", icon: "cpu" },
     { href: "/events", label: "Events", icon: "inbox" },
     { href: "/runs", label: "Runs", icon: "play" },
@@ -38,13 +39,15 @@
             <span class="w-5 h-5"
               >{item.icon === "home"
                 ? "🏠"
-                : item.icon === "cpu"
-                  ? "⚙️"
-                  : item.icon === "inbox"
-                    ? "📥"
-                    : item.icon === "play"
-                      ? "▶️"
-                      : "⚙️"}</span
+                : item.icon === "wand"
+                  ? "✨"
+                  : item.icon === "cpu"
+                    ? "⚙️"
+                    : item.icon === "inbox"
+                      ? "📥"
+                      : item.icon === "play"
+                        ? "▶️"
+                        : "⚙️"}</span
             >
             <span>{item.label}</span>
           </a>
