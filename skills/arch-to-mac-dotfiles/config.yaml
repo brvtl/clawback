@@ -1,0 +1,36 @@
+# Arch to Mac Dotfiles Sync Configuration
+
+# Repository mapping
+repositories:
+  source: brvtl/ArchDotfiles
+  target: brvtl/MacDotfiles
+
+# Files/patterns to always skip (Linux-only)
+skip_patterns:
+  - "i3/**"
+  - "sway/**"
+  - "hyprland/**"
+  - "waybar/**"
+  - "rofi/**"
+  - "polybar/**"
+  - "dunst/**"
+  - "**/*.service" # systemd units
+  - "xorg.conf*"
+  - ".xinitrc"
+  - ".xprofile"
+
+# Files/patterns that are usually portable (copy directly)
+portable_patterns:
+  - ".gitconfig"
+  - ".gitignore*"
+  - "nvim/**"
+  - "vim/**"
+  - ".vimrc"
+  - ".tmux.conf"
+  - "starship.toml"
+  - ".aliases"
+  - ".functions"
+
+notifications:
+  onComplete: true
+  onError: true

@@ -70,6 +70,23 @@ export function createTestConnection(): DatabaseConnection {
       FOREIGN KEY (event_id) REFERENCES events(id)
     );
 
+    CREATE TABLE IF NOT EXISTS skills (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      instructions TEXT NOT NULL,
+      triggers TEXT NOT NULL,
+      mcp_servers TEXT NOT NULL DEFAULT '{}',
+      tool_permissions TEXT NOT NULL DEFAULT '{"allow":["*"],"deny":[]}',
+      notifications_config TEXT NOT NULL DEFAULT '{"onComplete":false,"onError":true}',
+      knowledge TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      source TEXT NOT NULL DEFAULT 'api',
+      file_path TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL,

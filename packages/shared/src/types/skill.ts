@@ -22,11 +22,18 @@ export const NotificationSettingsSchema = z.object({
 
 export type NotificationSettings = z.infer<typeof NotificationSettingsSchema>;
 
+export const TriggerFilterSchema = z.object({
+  repository: z.string().optional(),
+  ref: z.array(z.string()).optional(),
+});
+
+export type TriggerFilter = z.infer<typeof TriggerFilterSchema>;
+
 export const TriggerSchema = z.object({
   source: z.string(),
   events: z.array(z.string()).optional(),
   schedule: z.string().optional(),
-  filter: z.record(z.unknown()).optional(),
+  filters: TriggerFilterSchema.optional(),
 });
 
 export type Trigger = z.infer<typeof TriggerSchema>;

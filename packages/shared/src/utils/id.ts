@@ -20,3 +20,7 @@ export function generateNotificationId(): string {
 export function generateToolCallId(): string {
   return generateId("tc");
 }
+
+export function generateSkillId(): string {
+  return generateId("skill");
+}

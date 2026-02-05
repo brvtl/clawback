@@ -3,7 +3,12 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { randomBytes } from "crypto";
 import { createTestConnection, type DatabaseConnection } from "@clawback/db";
-import { EventRepository, RunRepository, NotificationRepository } from "@clawback/db";
+import {
+  EventRepository,
+  RunRepository,
+  NotificationRepository,
+  SkillRepository,
+} from "@clawback/db";
 import { SkillRegistry } from "./skills/registry.js";
 import { SkillExecutor } from "./skills/executor.js";
 import { EventQueue } from "./services/queue.js";
@@ -47,6 +52,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const eventRepo = new EventRepository(db);
   const runRepo = new RunRepository(db);
   const notifRepo = new NotificationRepository(db);
+  const skillRepo = new SkillRepository(db);
 
   // Initialize MCP manager
   const mcpManager = new McpManager();
@@ -54,8 +60,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize notification service
   const notificationService = new NotificationService({ enableDesktop: true });
 
-  // Initialize skill registry
-  const skillRegistry = new SkillRegistry(options.skillsDir ?? "./skills");
+  // Initialize skill registry with database backing
+  const skillRegistry = new SkillRegistry(options.skillsDir ?? "./skills", skillRepo);
+
+  // Load skills from database and sync with file system
+  await skillRegistry.loadSkills();
 
   // Initialize skill executor
   const skillExecutor = new SkillExecutor({
@@ -70,8 +79,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Wire up event processing: queue -> skill executor -> notifications
   eventQueue.onEvent(async (event) => {
-    // Find matching skills for this event
-    const matches = skillRegistry.findMatchingSkills(event.source, event.type);
+    // Parse event payload for filter matching
+    const payload =
+      typeof event.payload === "string"
+        ? (JSON.parse(event.payload) as Record<string, unknown>)
+        : event.payload;
+
+    // Find matching skills for this event (with payload for filter matching)
+    const matches = skillRegistry.findMatchingSkills(event.source, event.type, payload);
 
     for (const { skill } of matches) {
       try {

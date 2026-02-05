@@ -81,3 +81,30 @@ export function mergeSkillConfig(
     knowledge: config?.knowledge ?? markdown.knowledge,
   };
 }
+
+import { readFile } from "fs/promises";
+import { dirname, join } from "path";
+import { generateSkillId } from "@clawback/shared";
+
+/**
+ * Load a skill from a SKILL.md file
+ */
+export async function loadSkillFromFile(filePath: string): Promise<Skill> {
+  const content = await readFile(filePath, "utf-8");
+  const markdownResult = parseSkillMarkdown(content);
+
+  // Try to load optional config.yaml
+  const dir = dirname(filePath);
+  let configResult: SkillConfigResult | undefined;
+
+  try {
+    const configPath = join(dir, "config.yaml");
+    const configContent = await readFile(configPath, "utf-8");
+    configResult = parseSkillConfig(configContent);
+  } catch {
+    // config.yaml is optional
+  }
+
+  const id = generateSkillId();
+  return mergeSkillConfig(id, markdownResult, configResult);
+}

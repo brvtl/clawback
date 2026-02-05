@@ -35,6 +35,28 @@ export const runs = sqliteTable("runs", {
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
 
+// Skills table - stores skill configurations
+export const skills = sqliteTable("skills", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  instructions: text("instructions").notNull(),
+  triggers: text("triggers").notNull(), // JSON array of triggers
+  mcpServers: text("mcp_servers").notNull().default("{}"), // JSON object
+  toolPermissions: text("tool_permissions").notNull().default('{"allow":["*"],"deny":[]}'), // JSON
+  notifications: text("notifications_config")
+    .notNull()
+    .default('{"onComplete":false,"onError":true}'), // JSON
+  knowledge: text("knowledge"), // JSON array of file paths
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  source: text("source", { enum: ["file", "api"] })
+    .notNull()
+    .default("api"), // Where skill was created
+  filePath: text("file_path"), // Original file path if loaded from disk
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
 // Notifications table - user notifications
 export const notifications = sqliteTable("notifications", {
   id: text("id").primaryKey(),
@@ -55,6 +77,9 @@ export type NewEvent = typeof events.$inferInsert;
 
 export type Run = typeof runs.$inferSelect;
 export type NewRun = typeof runs.$inferInsert;
+
+export type DbSkill = typeof skills.$inferSelect;
+export type NewDbSkill = typeof skills.$inferInsert;
 
 export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
