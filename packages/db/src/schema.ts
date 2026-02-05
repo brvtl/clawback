@@ -57,6 +57,19 @@ export const skills = sqliteTable("skills", {
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
 
+// MCP Servers table - global MCP server configurations
+export const mcpServers = sqliteTable("mcp_servers", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull().unique(), // Unique name for referencing (e.g., "github", "filesystem")
+  description: text("description"),
+  command: text("command").notNull(), // e.g., "npx"
+  args: text("args").notNull().default("[]"), // JSON array of args
+  env: text("env").notNull().default("{}"), // JSON object of env vars (credentials stored here)
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
 // Notifications table - user notifications
 export const notifications = sqliteTable("notifications", {
   id: text("id").primaryKey(),
@@ -83,3 +96,6 @@ export type NewDbSkill = typeof skills.$inferInsert;
 
 export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
+
+export type DbMcpServer = typeof mcpServers.$inferSelect;
+export type NewDbMcpServer = typeof mcpServers.$inferInsert;

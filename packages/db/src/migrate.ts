@@ -1,9 +1,11 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { resolve } from "path";
+import { resolve, join } from "path";
 
-const dbPath = process.env.DATABASE_URL ?? "./clawback.db";
+// Project root is 3 levels up from src/migrate.ts (src -> db -> packages -> root)
+const PROJECT_ROOT = resolve(import.meta.dirname, "../../..");
+const dbPath = process.env.DATABASE_URL ?? join(PROJECT_ROOT, "clawback.db");
 
 const sqlite = new Database(dbPath);
 sqlite.pragma("journal_mode = WAL");

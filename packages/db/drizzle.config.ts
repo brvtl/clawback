@@ -5,6 +5,7 @@ export default {
   out: "./drizzle",
   dialect: "sqlite",
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? "./clawback.db",
+    // Path relative to where drizzle-kit is run (packages/db)
+    url: process.env.DATABASE_URL ?? "../../clawback.db",
   },
 } satisfies Config;

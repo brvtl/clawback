@@ -62,6 +62,18 @@ export interface ApiNotification {
   createdAt: number;
 }
 
+export interface ApiMcpServer {
+  id: string;
+  name: string;
+  description?: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>; // Values are masked in responses
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -174,6 +186,51 @@ class ApiClient {
     return this.fetch<{ eventId: string }>("/webhook/test", {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  }
+
+  // MCP Server methods
+  async getMcpServers(): Promise<{ servers: ApiMcpServer[] }> {
+    return this.fetch<{ servers: ApiMcpServer[] }>("/api/mcp-servers");
+  }
+
+  async getMcpServer(id: string): Promise<{ server: ApiMcpServer }> {
+    return this.fetch<{ server: ApiMcpServer }>(`/api/mcp-servers/${id}`);
+  }
+
+  async createMcpServer(input: {
+    name: string;
+    description?: string;
+    command: string;
+    args?: string[];
+    env?: Record<string, string>;
+  }): Promise<{ server: ApiMcpServer }> {
+    return this.fetch<{ server: ApiMcpServer }>("/api/mcp-servers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async updateMcpServer(
+    id: string,
+    updates: {
+      name?: string;
+      description?: string;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      enabled?: boolean;
+    }
+  ): Promise<{ server: ApiMcpServer }> {
+    return this.fetch<{ server: ApiMcpServer }>(`/api/mcp-servers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteMcpServer(id: string): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(`/api/mcp-servers/${id}`, {
+      method: "DELETE",
     });
   }
 }

@@ -38,13 +38,23 @@ export const TriggerSchema = z.object({
 
 export type Trigger = z.infer<typeof TriggerSchema>;
 
+// MCP servers can be:
+// 1. Array of strings (global server references): ["github", "filesystem"]
+// 2. Record of configs (inline definitions): { github: { command: "npx", ... } }
+export const McpServersSchema = z
+  .union([
+    z.array(z.string()), // Global server references
+    z.record(McpServerConfigSchema), // Inline configs
+  ])
+  .default({});
+
 export const SkillSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().optional(),
   instructions: z.string(),
   triggers: z.array(TriggerSchema),
-  mcpServers: z.record(McpServerConfigSchema).default({}),
+  mcpServers: McpServersSchema,
   toolPermissions: ToolPermissionsSchema.default({ allow: ["*"], deny: [] }),
   notifications: NotificationSettingsSchema.default({ onComplete: false, onError: true }),
   knowledge: z.array(z.string()).optional(),

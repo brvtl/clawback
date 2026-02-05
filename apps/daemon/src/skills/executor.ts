@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { generateToolCallId, type Skill, type Event } from "@clawback/shared";
-import type { RunRepository, NotificationRepository, Run } from "@clawback/db";
+import type { RunRepository, NotificationRepository, Run, McpServerRepository } from "@clawback/db";
 import { McpManager, type ToolPermissions } from "../mcp/manager.js";
 
 export type ClaudeBackend = "api" | "sdk" | "auto";
@@ -9,6 +9,7 @@ export type ClaudeBackend = "api" | "sdk" | "auto";
 export interface ExecutorDependencies {
   runRepo: RunRepository;
   notifRepo: NotificationRepository;
+  mcpServerRepo: McpServerRepository;
   mcpManager: McpManager;
   anthropicApiKey?: string;
   claudeBackend?: ClaudeBackend;
@@ -33,12 +34,14 @@ export class SkillExecutor {
   private anthropic: Anthropic | null = null;
   private runRepo: RunRepository;
   private notifRepo: NotificationRepository;
+  private mcpServerRepo: McpServerRepository;
   private mcpManager: McpManager;
   private claudeBackend: ClaudeBackend;
 
   constructor(deps: ExecutorDependencies) {
     this.runRepo = deps.runRepo;
     this.notifRepo = deps.notifRepo;
+    this.mcpServerRepo = deps.mcpServerRepo;
     this.mcpManager = deps.mcpManager;
     this.claudeBackend = deps.claudeBackend ?? "auto";
 
@@ -170,14 +173,59 @@ export class SkillExecutor {
     }
 
     // Build MCP server config for SDK
-    const mcpServers: Record<string, { type: "stdio"; command: string; args: string[] }> = {};
+    // Supports two formats:
+    // 1. Array of strings: ["github", "filesystem"] - references global servers
+    // 2. Object with inline configs: { github: { command: ... } } - inline definitions
+    const mcpServers: Record<
+      string,
+      { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }
+    > = {};
+
     if (skill.mcpServers) {
-      for (const [name, config] of Object.entries(skill.mcpServers)) {
-        mcpServers[name] = {
-          type: "stdio",
-          command: config.command,
-          args: config.args ?? [],
-        };
+      // Check if it's an array (global server references)
+      if (Array.isArray(skill.mcpServers)) {
+        for (const serverName of skill.mcpServers) {
+          const globalServer = this.mcpServerRepo.findByName(serverName);
+          if (globalServer?.enabled) {
+            mcpServers[serverName] = {
+              type: "stdio",
+              command: globalServer.command,
+              args: globalServer.args,
+              env: globalServer.env,
+            };
+          } else {
+            console.warn(`MCP server "${serverName}" not found or disabled`);
+          }
+        }
+      } else {
+        // Object with inline configs
+        for (const [name, config] of Object.entries(skill.mcpServers)) {
+          // Check if this is a reference to a global server (string value)
+          if (typeof config === "string") {
+            const globalServer = this.mcpServerRepo.findByName(config);
+            if (globalServer?.enabled) {
+              mcpServers[name] = {
+                type: "stdio",
+                command: globalServer.command,
+                args: globalServer.args,
+                env: globalServer.env,
+              };
+            }
+          } else {
+            // Inline config - resolve ${VAR} placeholders in env values
+            const resolvedConfig = this.mcpManager.resolveEnvVars({
+              command: config.command,
+              args: config.args ?? [],
+              env: config.env,
+            });
+            mcpServers[name] = {
+              type: "stdio",
+              command: resolvedConfig.command,
+              args: resolvedConfig.args,
+              env: resolvedConfig.env,
+            };
+          }
+        }
       }
     }
 

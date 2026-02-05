@@ -2,12 +2,17 @@ import "dotenv/config";
 import { createServer } from "./server.js";
 import { createConnection } from "@clawback/db";
 import type { ClaudeBackend } from "./skills/executor.js";
-import { resolve } from "path";
+import { resolve, dirname, join } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// Project root is 3 levels up from src/index.ts (src -> daemon -> apps -> root)
+const PROJECT_ROOT = resolve(__dirname, "../../..");
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
-const DB_PATH = process.env.DATABASE_URL ?? "./clawback.db";
-const SKILLS_DIR = process.env.SKILLS_DIR ?? "./skills";
+const DB_PATH = process.env.DATABASE_URL ?? join(PROJECT_ROOT, "clawback.db");
+const SKILLS_DIR = process.env.SKILLS_DIR ?? join(PROJECT_ROOT, "skills");
 const CLAUDE_BACKEND = (process.env.CLAUDE_BACKEND as ClaudeBackend) ?? "auto";
 
 async function main() {

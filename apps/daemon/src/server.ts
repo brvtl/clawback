@@ -8,6 +8,7 @@ import {
   RunRepository,
   NotificationRepository,
   SkillRepository,
+  McpServerRepository,
 } from "@clawback/db";
 import { SkillRegistry } from "./skills/registry.js";
 import { SkillExecutor, type ClaudeBackend } from "./skills/executor.js";
@@ -22,6 +23,7 @@ export interface ServerContext {
   eventRepo: EventRepository;
   runRepo: RunRepository;
   notifRepo: NotificationRepository;
+  mcpServerRepo: McpServerRepository;
   skillRegistry: SkillRegistry;
   skillExecutor: SkillExecutor;
   eventQueue: EventQueue;
@@ -54,6 +56,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const runRepo = new RunRepository(db);
   const notifRepo = new NotificationRepository(db);
   const skillRepo = new SkillRepository(db);
+  const mcpServerRepo = new McpServerRepository(db);
 
   // Initialize MCP manager
   const mcpManager = new McpManager();
@@ -71,6 +74,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const skillExecutor = new SkillExecutor({
     runRepo,
     notifRepo,
+    mcpServerRepo,
     mcpManager,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     claudeBackend: options.claudeBackend,
@@ -130,6 +134,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     eventRepo,
     runRepo,
     notifRepo,
+    mcpServerRepo,
     skillRegistry,
     skillExecutor,
     eventQueue,

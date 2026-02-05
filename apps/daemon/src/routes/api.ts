@@ -209,4 +209,112 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       return reply.send({ success: true });
     }
   );
+
+  // ======================
+  // MCP Server Endpoints
+  // ======================
+
+  // List MCP servers
+  server.get("/api/mcp-servers", async (_request: FastifyRequest, reply: FastifyReply) => {
+    const servers = context.mcpServerRepo.findAll();
+    // Mask sensitive env values
+    const maskedServers = servers.map((s) => ({
+      ...s,
+      env: Object.fromEntries(Object.entries(s.env).map(([k, v]) => [k, v ? "••••••••" : ""])),
+    }));
+    return reply.send({ servers: maskedServers });
+  });
+
+  // Get MCP server by ID
+  server.get<{ Params: { id: string } }>(
+    "/api/mcp-servers/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const server = context.mcpServerRepo.findById(request.params.id);
+      if (!server) {
+        return reply.status(404).send({ error: "MCP server not found" });
+      }
+      // Mask sensitive env values
+      const maskedServer = {
+        ...server,
+        env: Object.fromEntries(
+          Object.entries(server.env).map(([k, v]) => [k, v ? "••••••••" : ""])
+        ),
+      };
+      return reply.send({ server: maskedServer });
+    }
+  );
+
+  // Create MCP server
+  server.post("/api/mcp-servers", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as {
+      name: string;
+      description?: string;
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+    };
+
+    // Check for duplicate name
+    const existing = context.mcpServerRepo.findByName(body.name);
+    if (existing) {
+      return reply
+        .status(400)
+        .send({ error: `MCP server with name "${body.name}" already exists` });
+    }
+
+    const server = context.mcpServerRepo.create({
+      name: body.name,
+      description: body.description,
+      command: body.command,
+      args: body.args,
+      env: body.env,
+    });
+
+    return reply.status(201).send({ server });
+  });
+
+  // Update MCP server
+  server.put<{ Params: { id: string } }>(
+    "/api/mcp-servers/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const existing = context.mcpServerRepo.findById(request.params.id);
+      if (!existing) {
+        return reply.status(404).send({ error: "MCP server not found" });
+      }
+
+      const body = request.body as {
+        name?: string;
+        description?: string;
+        command?: string;
+        args?: string[];
+        env?: Record<string, string>;
+        enabled?: boolean;
+      };
+
+      // If updating name, check for duplicates
+      if (body.name && body.name !== existing.name) {
+        const duplicate = context.mcpServerRepo.findByName(body.name);
+        if (duplicate) {
+          return reply
+            .status(400)
+            .send({ error: `MCP server with name "${body.name}" already exists` });
+        }
+      }
+
+      const updated = context.mcpServerRepo.update(request.params.id, body);
+      return reply.send({ server: updated });
+    }
+  );
+
+  // Delete MCP server
+  server.delete<{ Params: { id: string } }>(
+    "/api/mcp-servers/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const deleted = context.mcpServerRepo.delete(request.params.id);
+      if (!deleted) {
+        return reply.status(404).send({ error: "MCP server not found" });
+      }
+      return reply.send({ success: true });
+    }
+  );
 }
