@@ -10,7 +10,7 @@ import {
   SkillRepository,
 } from "@clawback/db";
 import { SkillRegistry } from "./skills/registry.js";
-import { SkillExecutor } from "./skills/executor.js";
+import { SkillExecutor, type ClaudeBackend } from "./skills/executor.js";
 import { EventQueue } from "./services/queue.js";
 import { McpManager } from "./mcp/manager.js";
 import { NotificationService } from "./services/notifications.js";
@@ -32,6 +32,7 @@ export interface ServerContext {
 export interface CreateServerOptions extends FastifyServerOptions {
   db?: DatabaseConnection;
   skillsDir?: string;
+  claudeBackend?: ClaudeBackend;
 }
 
 export async function createServer(options: CreateServerOptions = {}): Promise<FastifyInstance> {
@@ -72,6 +73,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     notifRepo,
     mcpManager,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    claudeBackend: options.claudeBackend,
   });
 
   // Initialize event queue

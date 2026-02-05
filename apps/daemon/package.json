@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.32",
     "@anthropic-ai/sdk": "^0.20.0",
     "@clawback/db": "workspace:*",
     "@clawback/shared": "workspace:*",
@@ -20,6 +21,7 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chokidar": "^3.6.0",
     "cron-parser": "^4.9.0",
+    "dotenv": "^17.2.3",
     "fastify": "^4.26.0",
     "gray-matter": "^4.0.3",
     "micromatch": "^4.0.5",

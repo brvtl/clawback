@@ -49,6 +49,42 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
     return reply.send({ skills });
   });
 
+  // Create skill
+  server.post("/api/skills", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as {
+      name: string;
+      description?: string;
+      instructions: string;
+      triggers: Array<{
+        source: string;
+        events?: string[];
+        schedule?: string;
+        filters?: { repository?: string; ref?: string[] };
+      }>;
+      mcpServers?: Record<
+        string,
+        { command: string; args?: string[]; env?: Record<string, string> }
+      >;
+      toolPermissions?: { allow?: string[]; deny?: string[] };
+      notifications?: { onComplete?: boolean; onError?: boolean };
+      knowledge?: string[];
+    };
+
+    const skill = context.skillRegistry.registerSkill({
+      id: "", // Will be generated
+      name: body.name,
+      description: body.description,
+      instructions: body.instructions,
+      triggers: body.triggers,
+      mcpServers: body.mcpServers ?? {},
+      toolPermissions: body.toolPermissions ?? { allow: ["*"], deny: [] },
+      notifications: body.notifications ?? { onComplete: false, onError: true },
+      knowledge: body.knowledge,
+    });
+
+    return reply.status(201).send({ skill });
+  });
+
   // Get skill by ID
   server.get<{ Params: { id: string } }>(
     "/api/skills/:id",
