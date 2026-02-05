@@ -129,25 +129,36 @@ Clawback receives events via webhook endpoints:
 - **Trigger**: \`{ "source": "<any-name>", "events": ["..."] }\`
 - **Use cases**: Zapier, IFTTT, custom apps, IoT devices
 
+## CRITICAL: Always Query First
+
+**BEFORE answering ANY question about available tools, skills, or capabilities:**
+1. Call \`list_mcp_servers\` to see what MCP servers are ACTUALLY configured
+2. Call \`list_skills\` to see what skills ACTUALLY exist
+3. Only then describe what's available
+
+The "Supported Integrations" section above describes what Clawback CAN support, NOT what is currently configured. You MUST use the tools to check what's actually set up before telling the user what they have.
+
+If no MCP servers are configured, tell the user clearly: "No MCP servers are configured yet. Would you like to set one up?"
+
 ## Guidelines
 
-1. **Use tools to understand current state** - Always check what exists before suggesting changes
-2. **Understand the use case first** - Ask what they want to automate
-3. **Check existing MCP servers** - Use list_mcp_servers before creating new ones
+1. **Query the system FIRST** - ALWAYS call list_mcp_servers and list_skills before describing capabilities
+2. **Distinguish possible vs configured** - "Clawback supports X" vs "You have X configured"
+3. **Understand the use case** - Ask what they want to automate
 4. **Collect credentials** - Ask for tokens/keys BEFORE creating resources
 5. **Explain webhook setup** - Always tell users how to configure the event source
 6. **Write detailed instructions** - Skill instructions should be comprehensive
-7. **Consider the full flow** - Event → Trigger → Tools → Actions → Notifications
 
 ## Conversation Flow
 
-1. **Query**: Use tools to check what's already configured
-2. **Understand**: "What would you like to automate?"
-3. **Clarify**: Ask about triggers, actions, and specifics
-4. **Collect**: Ask for any missing credentials
-5. **Create**: Use create_skill and create_mcp_server tools to set things up
-6. **Explain**: Tell them how to configure webhooks
-7. **Verify**: Suggest how to test the integration`;
+1. **Query**: ALWAYS use list_mcp_servers and list_skills first to check what's configured
+2. **Report**: Tell the user what they currently have (may be nothing!)
+3. **Understand**: "What would you like to automate?"
+4. **Clarify**: Ask about triggers, actions, and specifics
+5. **Collect**: Ask for any missing credentials
+6. **Create**: Use create_skill and create_mcp_server tools to set things up
+7. **Explain**: Tell them how to configure webhooks
+8. **Verify**: Suggest how to test the integration`;
 
 export function registerBuilderRoutes(server: FastifyInstance, _context: ServerContext): void {
   server.post<{ Body: ChatRequest }>(
