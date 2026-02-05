@@ -5,10 +5,12 @@ Event-driven Claude automation engine. Receives events → routes to skills → 
 ## Features
 
 - **Event Ingestion**: Webhooks for GitHub, Slack, and generic sources
-- **Skill-Based Routing**: YAML/Markdown-defined skills with pattern matching
-- **Claude Execution**: Agentic loop with MCP tool integration
+- **AI-Powered Skill Builder**: Describe what you want in plain English, Claude generates the skill
+- **Skill-Based Routing**: Pattern matching routes events to appropriate skills
+- **Claude Execution**: Agentic loop via Claude Agent SDK with MCP tool integration
+- **MCP Server Management**: Configure and manage MCP servers through the web UI
 - **Real-Time Notifications**: Desktop + WebSocket notifications
-- **Web Dashboard**: SvelteKit UI for monitoring and management
+- **Web Dashboard**: SvelteKit UI for monitoring, management, and skill creation
 
 ## Architecture
 
@@ -16,11 +18,11 @@ Event-driven Claude automation engine. Receives events → routes to skills → 
 ┌─────────────┐     ┌──────────────┐     ┌────────────────┐
 │   Webhooks  │────▶│  Event Queue │────▶│  Skill Router  │
 └─────────────┘     └──────────────┘     └────────────────┘
-                                                 │
-                                                 ▼
+                                                │
+                                                ▼
 ┌─────────────┐     ┌──────────────┐     ┌────────────────┐
 │ Notification│◀────│    Claude    │◀────│  MCP Servers   │
-└─────────────┘     │    Executor  │     └────────────────┘
+└─────────────┘     │  Agent SDK   │     └────────────────┘
                     └──────────────┘
 ```
 
@@ -28,31 +30,31 @@ Event-driven Claude automation engine. Receives events → routes to skills → 
 
 ### Prerequisites
 
-- Node.js 24+ (use [asdf](https://asdf-vm.com/) with `.tool-versions`)
-- pnpm 9+ (via corepack)
+- Node.js 20+ (use [asdf](https://asdf-vm.com/) with `.tool-versions`)
+- pnpm 9+
 
 ### Installation
 
 ```bash
 # Enable corepack for pnpm
 corepack enable
-corepack prepare pnpm@9.0.0 --activate
 
 # Install dependencies
 pnpm install
 
-# Initialize database
-pnpm --filter @clawback/db db:push
+# Copy environment file and configure
+cp .env.example .env
+# Edit .env with your ANTHROPIC_API_KEY
 ```
 
 ### Development
 
 ```bash
 # Start daemon (port 3000)
-pnpm --filter @clawback/daemon dev
+pnpm dev
 
-# Start web UI (port 5173)
-pnpm --filter @clawback/web dev
+# Start web UI (port 5173) - in another terminal
+pnpm dev:web
 
 # Run tests
 pnpm test:run
@@ -73,43 +75,57 @@ docker compose logs -f daemon
 
 ## Creating Skills
 
-Skills are defined in the `skills/` directory. Each skill has:
+### Via Web UI (Recommended)
+
+1. Open the web UI at `http://localhost:5173`
+2. Go to Skills → Create New Skill
+3. Describe what you want in plain English (e.g., "Review pull requests on my GitHub repo")
+4. The AI builder generates the skill configuration
+5. Review and save
+
+### Via API
+
+```bash
+curl -X POST http://localhost:3000/api/skills \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "PR Reviewer",
+    "description": "Reviews pull requests",
+    "instructions": "You are a code reviewer...",
+    "triggers": [{"source": "github", "events": ["pull_request.opened"]}],
+    "mcpServers": ["github"],
+    "toolPermissions": {"allow": ["*"], "deny": []}
+  }'
+```
+
+### Via File System
+
+Skills can be defined in the `skills/` directory with:
 
 - `SKILL.md` - Instructions and frontmatter configuration
 - `config.yaml` - Optional configuration overrides
 
-### Example Skill
+## MCP Server Management
 
-```markdown
----
-name: GitHub PR Reviewer
-description: Automatically reviews pull requests
-triggers:
-  - source: github
-    events:
-      - pull_request.opened
-      - pull_request.synchronize
-mcpServers:
-  github:
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-github"]
-    env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
-toolPermissions:
-  allow:
-    - "github:get_*"
-    - "github:list_*"
-    - "github:create_*_comment"
-  deny:
-    - "github:delete_*"
-notifications:
-  onComplete: true
-  onError: true
----
+Configure MCP servers through the web UI at Settings → MCP Servers, or via API:
 
-# GitHub PR Reviewer
+```bash
+curl -X POST http://localhost:3000/api/mcp-servers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "github",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."}
+  }'
+```
 
-You are an expert code reviewer...
+Skills reference MCP servers by name:
+
+```json
+{
+  "mcpServers": ["github", "filesystem"]
+}
 ```
 
 ## API Endpoints
@@ -119,32 +135,37 @@ You are an expert code reviewer...
 | POST   | `/webhook/:source`   | Receive webhooks   |
 | GET    | `/api/status`        | System status      |
 | GET    | `/api/skills`        | List skills        |
+| POST   | `/api/skills`        | Create skill       |
 | GET    | `/api/events`        | List events        |
 | GET    | `/api/runs`          | List runs          |
 | GET    | `/api/notifications` | List notifications |
+| GET    | `/api/mcp-servers`   | List MCP servers   |
+| POST   | `/api/mcp-servers`   | Create MCP server  |
 
 ## Environment Variables
 
-| Variable            | Default         | Description          |
-| ------------------- | --------------- | -------------------- |
-| `PORT`              | `3000`          | Server port          |
-| `HOST`              | `0.0.0.0`       | Server host          |
-| `DATABASE_URL`      | `./clawback.db` | SQLite database path |
-| `SKILLS_DIR`        | `./skills`      | Skills directory     |
-| `LOG_LEVEL`         | `info`          | Logging level        |
-| `ANTHROPIC_API_KEY` | -               | Claude API key       |
+| Variable            | Default         | Description                 |
+| ------------------- | --------------- | --------------------------- |
+| `PORT`              | `3000`          | Server port                 |
+| `HOST`              | `0.0.0.0`       | Server host                 |
+| `DATABASE_URL`      | `./clawback.db` | SQLite database path        |
+| `SKILLS_DIR`        | `./skills`      | Skills directory            |
+| `ANTHROPIC_API_KEY` | -               | Claude API key (optional\*) |
+| `CLAUDE_BACKEND`    | `auto`          | `sdk`, `api`, or `auto`     |
+
+\*The Claude Agent SDK can use its own authentication when running locally.
 
 ## Project Structure
 
 ```
 clawback/
 ├── apps/
-│   ├── daemon/       # Fastify backend
-│   └── web/          # SvelteKit frontend
+│   ├── daemon/       # Fastify backend + skill executor
+│   └── web/          # SvelteKit frontend + skill builder
 ├── packages/
-│   ├── shared/       # Types, schemas, utils
+│   ├── shared/       # Types, schemas, MCP server registry
 │   └── db/           # Drizzle ORM, repositories
-├── skills/           # User-defined skills
+├── skills/           # File-based skill definitions
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -153,10 +174,10 @@ clawback/
 
 - **Backend**: TypeScript, Fastify, Drizzle ORM, SQLite
 - **Frontend**: SvelteKit, Tailwind CSS
-- **AI**: Anthropic Claude SDK, MCP SDK
+- **AI**: Claude Agent SDK, Anthropic SDK, MCP SDK
 - **Testing**: Vitest
 - **Validation**: Zod
 
 ## License
 
-MIT
+[Polyform Noncommercial 1.0.0](LICENSE) - Free for personal and non-commercial use.
