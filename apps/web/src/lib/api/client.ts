@@ -43,7 +43,12 @@ export interface ApiSkill {
     source: string;
     events?: string[];
     schedule?: string;
+    filters?: { repository?: string; ref?: string[] };
   }>;
+  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  toolPermissions?: { allow?: string[]; deny?: string[] };
+  notifications?: { onComplete?: boolean; onError?: boolean };
+  knowledge?: string[];
 }
 
 export interface ApiNotification {

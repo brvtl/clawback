@@ -16,6 +16,10 @@
   let editDescription = "";
   let editInstructions = "";
   let editTriggers = "";
+  let editMcpServers = "";
+  let editToolPermissions = "";
+  let editNotifications = "";
+  let editKnowledge = "";
 
   onMount(async () => {
     try {
@@ -35,6 +39,18 @@
     editDescription = skill.description ?? "";
     editInstructions = skill.instructions;
     editTriggers = JSON.stringify(skill.triggers, null, 2);
+    editMcpServers = JSON.stringify(skill.mcpServers ?? {}, null, 2);
+    editToolPermissions = JSON.stringify(
+      skill.toolPermissions ?? { allow: ["*"], deny: [] },
+      null,
+      2
+    );
+    editNotifications = JSON.stringify(
+      skill.notifications ?? { onComplete: false, onError: true },
+      null,
+      2
+    );
+    editKnowledge = (skill.knowledge ?? []).join("\n");
   }
 
   function openEditModal() {
@@ -46,25 +62,61 @@
     showEditModal = false;
   }
 
+  function parseJsonSafe(str: string, fieldName: string): { value: unknown; error: string | null } {
+    try {
+      return { value: JSON.parse(str), error: null };
+    } catch {
+      return { value: null, error: `Invalid JSON in ${fieldName}` };
+    }
+  }
+
   async function saveSkill() {
     if (!skill) return;
 
     saving = true;
-    try {
-      let parsedTriggers;
-      try {
-        parsedTriggers = JSON.parse(editTriggers);
-      } catch {
-        error = "Invalid triggers JSON";
-        saving = false;
-        return;
-      }
+    error = null;
 
+    // Parse all JSON fields
+    const triggersResult = parseJsonSafe(editTriggers, "Triggers");
+    if (triggersResult.error) {
+      error = triggersResult.error;
+      saving = false;
+      return;
+    }
+
+    const mcpServersResult = parseJsonSafe(editMcpServers, "MCP Servers");
+    if (mcpServersResult.error) {
+      error = mcpServersResult.error;
+      saving = false;
+      return;
+    }
+
+    const toolPermissionsResult = parseJsonSafe(editToolPermissions, "Tool Permissions");
+    if (toolPermissionsResult.error) {
+      error = toolPermissionsResult.error;
+      saving = false;
+      return;
+    }
+
+    const notificationsResult = parseJsonSafe(editNotifications, "Notifications");
+    if (notificationsResult.error) {
+      error = notificationsResult.error;
+      saving = false;
+      return;
+    }
+
+    try {
       const response = await api.updateSkill(skill.id, {
         name: editName,
         description: editDescription || undefined,
         instructions: editInstructions,
-        triggers: parsedTriggers,
+        triggers: triggersResult.value as ApiSkill["triggers"],
+        mcpServers: mcpServersResult.value as ApiSkill["mcpServers"],
+        toolPermissions: toolPermissionsResult.value as ApiSkill["toolPermissions"],
+        notifications: notificationsResult.value as ApiSkill["notifications"],
+        knowledge: editKnowledge.trim()
+          ? editKnowledge.split("\n").filter((k) => k.trim())
+          : undefined,
       });
 
       skill = response.skill;
@@ -158,6 +210,16 @@
               {#if trigger.schedule}
                 <div class="text-sm text-gray-400">Schedule: {trigger.schedule}</div>
               {/if}
+              {#if trigger.filters}
+                <div class="text-sm text-gray-400 mt-1">
+                  {#if trigger.filters.repository}
+                    <span>Repository: {trigger.filters.repository}</span>
+                  {/if}
+                  {#if trigger.filters.ref}
+                    <span class="ml-2">Refs: {trigger.filters.ref.join(", ")}</span>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -169,6 +231,103 @@
         <pre
           class="bg-gray-900 rounded-lg p-4 text-sm text-gray-300 whitespace-pre-wrap overflow-x-auto">{skill.instructions}</pre>
       </div>
+
+      <!-- MCP Servers -->
+      {#if skill.mcpServers && Object.keys(skill.mcpServers).length > 0}
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6">
+          <h2 class="text-lg font-semibold mb-4">MCP Servers</h2>
+          <div class="space-y-3">
+            {#each Object.entries(skill.mcpServers) as [name, config]}
+              <div class="bg-gray-900 rounded-lg p-4">
+                <div class="font-mono text-blue-400 mb-2">{name}</div>
+                <div class="text-sm text-gray-400">
+                  <div>Command: <code class="text-gray-300">{config.command}</code></div>
+                  {#if config.args && config.args.length > 0}
+                    <div>Args: <code class="text-gray-300">{config.args.join(" ")}</code></div>
+                  {/if}
+                  {#if config.env && Object.keys(config.env).length > 0}
+                    <div>
+                      Env: <code class="text-gray-300">{Object.keys(config.env).join(", ")}</code>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- Tool Permissions -->
+      {#if skill.toolPermissions}
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6">
+          <h2 class="text-lg font-semibold mb-4">Tool Permissions</h2>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <div class="text-sm text-gray-400 mb-2">Allow</div>
+              <div class="flex flex-wrap gap-2">
+                {#each skill.toolPermissions.allow ?? ["*"] as pattern}
+                  <span class="bg-green-500/20 text-green-400 text-xs px-2 py-1 rounded font-mono"
+                    >{pattern}</span
+                  >
+                {/each}
+              </div>
+            </div>
+            <div>
+              <div class="text-sm text-gray-400 mb-2">Deny</div>
+              <div class="flex flex-wrap gap-2">
+                {#if skill.toolPermissions.deny && skill.toolPermissions.deny.length > 0}
+                  {#each skill.toolPermissions.deny as pattern}
+                    <span class="bg-red-500/20 text-red-400 text-xs px-2 py-1 rounded font-mono"
+                      >{pattern}</span
+                    >
+                  {/each}
+                {:else}
+                  <span class="text-gray-500 text-sm">None</span>
+                {/if}
+              </div>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Notifications -->
+      {#if skill.notifications}
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6">
+          <h2 class="text-lg font-semibold mb-4">Notifications</h2>
+          <div class="flex gap-4">
+            <div class="flex items-center gap-2">
+              <span
+                class="w-3 h-3 rounded-full {skill.notifications.onComplete
+                  ? 'bg-green-500'
+                  : 'bg-gray-600'}"
+              ></span>
+              <span class="text-sm text-gray-400">On Complete</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span
+                class="w-3 h-3 rounded-full {skill.notifications.onError
+                  ? 'bg-green-500'
+                  : 'bg-gray-600'}"
+              ></span>
+              <span class="text-sm text-gray-400">On Error</span>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Knowledge -->
+      {#if skill.knowledge && skill.knowledge.length > 0}
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6">
+          <h2 class="text-lg font-semibold mb-4">Knowledge Files</h2>
+          <div class="space-y-2">
+            {#each skill.knowledge as file}
+              <div class="bg-gray-900 rounded px-3 py-2 font-mono text-sm text-gray-300">
+                {file}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       <!-- Skill ID -->
       <div class="bg-gray-800 rounded-lg border border-gray-700 p-6">
@@ -192,35 +351,45 @@
   >
     <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
     <div
-      class="bg-gray-800 rounded-lg border border-gray-700 p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4"
+      class="bg-gray-800 rounded-lg border border-gray-700 p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto m-4"
       on:click|stopPropagation
       on:keydown|stopPropagation
       role="document"
     >
       <h2 class="text-xl font-bold mb-4">Edit Skill</h2>
 
-      <form on:submit|preventDefault={saveSkill} class="space-y-4">
-        <div>
-          <label for="name" class="block text-sm font-medium text-gray-400 mb-1">Name</label>
-          <input
-            id="name"
-            type="text"
-            bind:value={editName}
-            required
-            class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-          />
+      {#if error}
+        <div
+          class="bg-red-500/20 border border-red-500/30 rounded-lg p-3 text-red-400 mb-4 text-sm"
+        >
+          {error}
         </div>
+      {/if}
 
-        <div>
-          <label for="description" class="block text-sm font-medium text-gray-400 mb-1"
-            >Description</label
-          >
-          <input
-            id="description"
-            type="text"
-            bind:value={editDescription}
-            class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-          />
+      <form on:submit|preventDefault={saveSkill} class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label for="name" class="block text-sm font-medium text-gray-400 mb-1">Name</label>
+            <input
+              id="name"
+              type="text"
+              bind:value={editName}
+              required
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <div>
+            <label for="description" class="block text-sm font-medium text-gray-400 mb-1"
+              >Description</label
+            >
+            <input
+              id="description"
+              type="text"
+              bind:value={editDescription}
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+            />
+          </div>
         </div>
 
         <div>
@@ -231,25 +400,79 @@
             id="instructions"
             bind:value={editInstructions}
             required
-            rows="10"
+            rows="8"
             class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-blue-500"
           ></textarea>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label for="triggers" class="block text-sm font-medium text-gray-400 mb-1"
+              >Triggers (JSON)</label
+            >
+            <textarea
+              id="triggers"
+              bind:value={editTriggers}
+              required
+              rows="6"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+            ></textarea>
+          </div>
+
+          <div>
+            <label for="mcpServers" class="block text-sm font-medium text-gray-400 mb-1"
+              >MCP Servers (JSON)</label
+            >
+            <textarea
+              id="mcpServers"
+              bind:value={editMcpServers}
+              rows="6"
+              placeholder={'{\n  "server-name": {\n    "command": "npx",\n    "args": ["-y", "@example/mcp-server"]\n  }\n}'}
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+            ></textarea>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label for="toolPermissions" class="block text-sm font-medium text-gray-400 mb-1"
+              >Tool Permissions (JSON)</label
+            >
+            <textarea
+              id="toolPermissions"
+              bind:value={editToolPermissions}
+              rows="4"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+            ></textarea>
+          </div>
+
+          <div>
+            <label for="notifications" class="block text-sm font-medium text-gray-400 mb-1"
+              >Notifications (JSON)</label
+            >
+            <textarea
+              id="notifications"
+              bind:value={editNotifications}
+              rows="4"
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+            ></textarea>
+          </div>
         </div>
 
         <div>
-          <label for="triggers" class="block text-sm font-medium text-gray-400 mb-1"
-            >Triggers (JSON)</label
+          <label for="knowledge" class="block text-sm font-medium text-gray-400 mb-1"
+            >Knowledge Files (one per line)</label
           >
           <textarea
-            id="triggers"
-            bind:value={editTriggers}
-            required
-            rows="6"
+            id="knowledge"
+            bind:value={editKnowledge}
+            rows="3"
+            placeholder={"./docs/example.md\n./knowledge/guide.txt"}
             class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-blue-500"
           ></textarea>
         </div>
 
-        <div class="flex justify-end gap-3 pt-4">
+        <div class="flex justify-end gap-3 pt-4 border-t border-gray-700">
           <button
             type="button"
             on:click={closeEditModal}
