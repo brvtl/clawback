@@ -205,6 +205,9 @@ Use the Clawback tools to query the system and help the user. When creating skil
           prompt: fullPrompt,
           options: {
             model: "claude-sonnet-4-20250514",
+            // Allow all MCP tools without prompting for permissions
+            permissionMode: "bypassPermissions",
+            allowDangerouslySkipPermissions: true,
             mcpServers: {
               clawback: {
                 type: "stdio",
