@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { ServerContext } from "../server.js";
+import { validateMcpServerEnv, fixMcpServerEnv } from "@clawback/shared";
 
 const VERSION = "0.1.0";
 
@@ -263,11 +264,20 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
     }
 
     // Normalize args to array (handle string input from builder)
-    let args: string[] | undefined;
+    let args: string[];
     if (typeof body.args === "string") {
       args = body.args.trim() ? body.args.trim().split(/\s+/) : [];
     } else {
-      args = body.args;
+      args = body.args ?? [];
+    }
+
+    // Validate and auto-fix env vars for known MCP server types
+    let env = body.env ?? {};
+    const validation = validateMcpServerEnv(args, env);
+    if (!validation.valid && Object.keys(validation.suggestions).length > 0) {
+      // Auto-fix common mistakes
+      env = fixMcpServerEnv(args, env);
+      console.log(`[API] Auto-fixed MCP server env vars:`, validation.suggestions);
     }
 
     const server = context.mcpServerRepo.create({
@@ -275,10 +285,14 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       description: body.description,
       command: body.command,
       args,
-      env: body.env,
+      env,
     });
 
-    return reply.status(201).send({ server });
+    // Include warnings in response if any
+    return reply.status(201).send({
+      server,
+      warnings: validation.warnings.length > 0 ? validation.warnings : undefined,
+    });
   });
 
   // Update MCP server
@@ -310,18 +324,36 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       }
 
       // Normalize args to array (handle string input from builder)
-      let args: string[] | undefined;
+      let args: string[];
       if (typeof body.args === "string") {
         args = body.args.trim() ? body.args.trim().split(/\s+/) : [];
       } else {
-        args = body.args;
+        args = body.args ?? existing.args;
+      }
+
+      // Validate and auto-fix env vars for known MCP server types
+      let env = body.env;
+      let warnings: string[] = [];
+      if (env) {
+        const validation = validateMcpServerEnv(args, env);
+        warnings = validation.warnings;
+        if (!validation.valid && Object.keys(validation.suggestions).length > 0) {
+          // Auto-fix common mistakes
+          env = fixMcpServerEnv(args, env);
+          console.log(`[API] Auto-fixed MCP server env vars:`, validation.suggestions);
+        }
       }
 
       const updated = context.mcpServerRepo.update(request.params.id, {
         ...body,
         args,
+        env,
       });
-      return reply.send({ server: updated });
+
+      return reply.send({
+        server: updated,
+        warnings: warnings.length > 0 ? warnings : undefined,
+      });
     }
   );
 

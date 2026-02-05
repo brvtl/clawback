@@ -236,6 +236,9 @@ export class SkillExecutor {
       prompt: userPrompt,
       options: {
         model: "claude-sonnet-4-20250514",
+        // Allow all MCP tools without prompting for permissions
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
         allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
         mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
       },
