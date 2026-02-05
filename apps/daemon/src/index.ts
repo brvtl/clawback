@@ -1,4 +1,4 @@
-import "dotenv/config";
+import { config } from "dotenv";
 import { createServer } from "./server.js";
 import { createConnection } from "@clawback/db";
 import type { ClaudeBackend } from "./skills/executor.js";
@@ -8,6 +8,11 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Project root is 3 levels up from src/index.ts (src -> daemon -> apps -> root)
 const PROJECT_ROOT = resolve(__dirname, "../../..");
+
+// Load environment variables from project root
+// .env.local overrides .env (for local development secrets)
+config({ path: join(PROJECT_ROOT, ".env") });
+config({ path: join(PROJECT_ROOT, ".env.local"), override: true });
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";

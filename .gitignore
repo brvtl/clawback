@@ -8,9 +8,12 @@ dist
 # Database
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 
-# Environment
-.env
+# Environment (secrets)
+# .env is committed with non-secret defaults
+# .env.local contains secrets and overrides (never committed)
 .env.local
 .env.*.local
 
