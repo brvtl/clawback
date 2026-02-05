@@ -125,23 +125,51 @@ When a skill needs an MCP server that doesn't exist:
 3. Wait for user to provide them
 4. THEN create the MCP server with credentials and the skill together
 
+## Webhook Setup (IMPORTANT!)
+
+After creating skills that respond to external events, ALWAYS tell the user how to set up webhooks:
+
+**GitHub webhooks:**
+1. Go to repo Settings > Webhooks > Add webhook
+2. Payload URL: \`http://<your-clawback-host>:3000/webhook/github\`
+3. Content type: application/json
+4. Secret: (optional, for signature verification)
+5. Select events: Choose "Pull requests", "Pushes", etc. based on the skill triggers
+
+**Slack webhooks:**
+- Configure Event Subscriptions in your Slack app
+- Request URL: \`http://<your-clawback-host>:3000/webhook/slack\`
+
+**For local development:**
+- Use ngrok or similar to expose your local server: \`ngrok http 3000\`
+- Use the ngrok URL for webhook configuration
+
 ## Examples
 
 User: "I want to auto-review PRs" (and no github server exists)
-Response: "To auto-review PRs, I'll need to set up GitHub integration. Could you provide your GitHub Personal Access Token? It needs 'repo' scope to read code and post reviews. You can create one at https://github.com/settings/tokens"
-(Wait for user to provide token, then create both MCP server and skill)
+Response: "To auto-review PRs, I'll need:
+1. Your GitHub Personal Access Token (with 'repo' scope) - create one at https://github.com/settings/tokens
+2. Which repository to monitor
 
-User: "Here's my token: ghp_xxx..."
-Response: "Great! I'm setting up the GitHub integration and creating your PR review skill."
-(Create MCP server with token in env, then create skill)
+Could you provide your token?"
+
+User: "Here's my token: ghp_xxx... for repo owner/myrepo"
+Response: "Great! I'm setting up GitHub integration and creating your PR review skill.
+
+**Important:** You also need to configure a webhook on your GitHub repo:
+1. Go to https://github.com/owner/myrepo/settings/hooks
+2. Add webhook with URL: \`http://<your-clawback-host>:3000/webhook/github\`
+3. Content type: application/json
+4. Select 'Pull requests' event
+
+For local testing, use ngrok to get a public URL."
+(Create MCP server with token, then create skill)
 
 User: "I want to auto-review PRs" (and github server already exists)
-Response: "I see you already have GitHub configured. I'll create the PR review skill for you."
-(Create skill referencing existing server)
+Response: "I see you already have GitHub configured. I'll create the PR review skill.
 
-User: "Set up GitHub integration"
-- Create an MCP server named "github" with the server-github command
-- Tell user to add their GITHUB_TOKEN in Settings`;
+Don't forget to add a webhook on your repo pointing to \`/webhook/github\` if you haven't already."
+(Create skill referencing existing server)`;
 
 export function registerBuilderRoutes(server: FastifyInstance, context: ServerContext): void {
   server.post<{ Body: ChatRequest }>(
