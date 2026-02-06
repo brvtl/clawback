@@ -1,6 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
-  generateToolCallId,
   type Skill,
   type Event,
   type ToolPermissions as SharedToolPermissions,
@@ -11,8 +10,8 @@ import type {
   Run,
   McpServerRepository,
   SkillRepository,
+  McpServer,
 } from "@clawback/db";
-import { McpManager, type ToolPermissions } from "../mcp/manager.js";
 import type { RemoteSkillFetcher } from "../services/remote-skill-fetcher.js";
 import type { SkillReviewer } from "../services/skill-reviewer.js";
 
@@ -26,7 +25,6 @@ export interface ExecutorDependencies {
   runRepo: RunRepository;
   notifRepo: NotificationRepository;
   mcpServerRepo: McpServerRepository;
-  mcpManager: McpManager;
   skillRepo?: SkillRepository;
   remoteSkillFetcher?: RemoteSkillFetcher;
   skillReviewer?: SkillReviewer;
@@ -49,27 +47,24 @@ export interface AgentLoopResult {
 }
 
 export class SkillExecutor {
-  private anthropic: Anthropic | null = null;
   private runRepo: RunRepository;
   private notifRepo: NotificationRepository;
   private mcpServerRepo: McpServerRepository;
-  private mcpManager: McpManager;
   private skillRepo?: SkillRepository;
   private remoteSkillFetcher?: RemoteSkillFetcher;
   private skillReviewer?: SkillReviewer;
+  private anthropicApiKey?: string;
 
   constructor(deps: ExecutorDependencies) {
     this.runRepo = deps.runRepo;
     this.notifRepo = deps.notifRepo;
     this.mcpServerRepo = deps.mcpServerRepo;
-    this.mcpManager = deps.mcpManager;
     this.skillRepo = deps.skillRepo;
     this.remoteSkillFetcher = deps.remoteSkillFetcher;
     this.skillReviewer = deps.skillReviewer;
+    this.anthropicApiKey = deps.anthropicApiKey;
 
-    if (deps.anthropicApiKey) {
-      this.anthropic = new Anthropic({ apiKey: deps.anthropicApiKey });
-    } else {
+    if (!deps.anthropicApiKey) {
       console.log("[SkillExecutor] WARNING: No ANTHROPIC_API_KEY configured - skills will not run");
     }
   }
@@ -241,141 +236,147 @@ export class SkillExecutor {
     };
   }
 
-  async runAgentLoop(skill: Skill, event: Event, run: Run): Promise<AgentLoopResult> {
-    if (!this.anthropic) {
+  async runAgentLoop(skill: Skill, event: Event, _run: Run): Promise<AgentLoopResult> {
+    if (!this.anthropicApiKey) {
       return {
         output: { message: "No API key configured" },
         toolCalls: [],
       };
     }
 
-    // Setup MCP servers if the skill has any configured
-    if (skill.mcpServers) {
-      if (Array.isArray(skill.mcpServers)) {
-        // Array of server names - resolve from global config
-        for (const serverName of skill.mcpServers) {
-          const globalServer = this.mcpServerRepo.findByName(serverName);
-          if (globalServer?.enabled) {
-            if (!this.mcpManager.hasServer(serverName)) {
-              this.mcpManager.registerServer(serverName, {
-                command: globalServer.command,
-                args: globalServer.args,
-                env: globalServer.env,
-              });
-            }
-            this.mcpManager.startServer(serverName);
-          } else {
-            console.warn(`[Executor] MCP server "${serverName}" not found or disabled`);
-          }
-        }
-      } else {
-        // Object with inline configs
-        this.mcpManager.setupServersForSkill(skill.mcpServers);
-      }
-    }
-
-    // Build tool permissions from skill config
-    const toolPermissions: ToolPermissions = {
-      allow: skill.toolPermissions?.allow ?? [],
-      deny: skill.toolPermissions?.deny ?? [],
-    };
+    // Build MCP server configs from skill settings
+    const mcpServers = this.buildMcpServersConfig(skill);
 
     const systemPrompt = this.buildSystemPrompt(skill, event);
     const toolCalls: ToolCallResult[] = [];
 
-    // Build initial message
+    // Build the full prompt
     const eventPayload = (
       typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
     ) as Record<string, unknown>;
-    const userMessage = `Process this ${event.type} event from ${event.source}:\n\n${JSON.stringify(eventPayload, null, 2)}`;
 
-    let messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
-    let continueLoop = true;
-    let finalOutput: Record<string, unknown> = {};
+    const fullPrompt = `${systemPrompt}
 
-    while (continueLoop) {
-      const response = await this.anthropic.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
-        system: systemPrompt,
-        messages,
+---
+
+Process this ${event.type} event from ${event.source}:
+
+\`\`\`json
+${JSON.stringify(eventPayload, null, 2)}
+\`\`\``;
+
+    console.log(
+      `[SkillExecutor] Running skill "${skill.name}" with ${Object.keys(mcpServers).length} MCP servers`
+    );
+
+    let finalResponse = "";
+
+    try {
+      // Use the Claude Agent SDK for execution with MCP tools
+      const q = query({
+        prompt: fullPrompt,
+        options: {
+          model: "claude-sonnet-4-20250514",
+          maxTurns: 20,
+          // Allow all MCP tools without prompting for permissions
+          permissionMode: "bypassPermissions",
+          allowDangerouslySkipPermissions: true,
+          mcpServers,
+        },
       });
 
-      // Check if we need to handle tool use
-      const toolUseBlocks = response.content.filter(
-        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-      );
-
-      if (toolUseBlocks.length > 0) {
-        // Process tool calls
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
-
-        for (const toolUse of toolUseBlocks) {
-          // ESLint has trouble with Anthropic SDK type guards
-          /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
-          const toolName = toolUse.name as string;
-          const toolInput = toolUse.input as Record<string, unknown>;
-          const toolId = toolUse.id as string;
-          /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
-
-          const startedAt = new Date();
-          let output: Record<string, unknown> | null = null;
-          let error: string | null = null;
-
-          try {
-            // Call tool through MCP manager
-            output = this.mcpManager.callTool(toolName, toolInput, toolPermissions);
-          } catch (e) {
-            error = e instanceof Error ? e.message : "Tool execution failed";
+      for await (const msg of q) {
+        if (msg.type === "assistant") {
+          const content = (msg as { message: { content: unknown } }).message.content;
+          if (Array.isArray(content)) {
+            for (const block of content as Array<{ type: string; text?: string }>) {
+              if (block.type === "text" && block.text) {
+                finalResponse += block.text;
+              }
+            }
           }
-
-          const completedAt = new Date();
-          const toolCallResult: ToolCallResult = {
-            id: generateToolCallId(),
-            name: toolName,
-            input: toolInput,
-            output,
-            error,
-            startedAt,
-            completedAt,
-          };
-
-          toolCalls.push(toolCallResult);
-          await this.runRepo.addToolCall(run.id, toolCallResult);
-
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: toolId,
-            content: error ?? JSON.stringify(output),
-            is_error: error !== null,
-          });
+        } else if (msg.type === "result") {
+          const resultMsg = msg as { result?: unknown };
+          if (resultMsg.result) {
+            finalResponse = String(resultMsg.result);
+          }
         }
-
-        // Add assistant message and tool results to continue the loop
-        messages = [
-          ...messages,
-          { role: "assistant", content: response.content },
-          { role: "user", content: toolResults },
-        ];
-      } else {
-        // No more tool use, extract final response
-        const textBlocks = response.content.filter(
-          (block): block is Anthropic.TextBlock => block.type === "text"
-        );
-
-        finalOutput = {
-          response: textBlocks.map((b) => b.text).join("\n"),
-        };
-        continueLoop = false;
+        // Note: Tool calls are handled internally by the SDK
+        // We could track them via tool_progress messages if needed
       }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Agent execution failed";
+      console.error(`[SkillExecutor] Error running skill "${skill.name}":`, errorMessage);
+      throw error;
+    }
 
-      // Check stop reason
-      if (response.stop_reason === "end_turn" && toolUseBlocks.length === 0) {
-        continueLoop = false;
+    return {
+      output: { response: finalResponse },
+      toolCalls,
+    };
+  }
+
+  /**
+   * Build MCP server configuration object from skill settings.
+   * Resolves server names to full configs from the database.
+   */
+  private buildMcpServersConfig(
+    skill: Skill
+  ): Record<
+    string,
+    { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }
+  > {
+    const mcpServers: Record<
+      string,
+      { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }
+    > = {};
+
+    if (!skill.mcpServers) {
+      return mcpServers;
+    }
+
+    if (Array.isArray(skill.mcpServers)) {
+      // Array of server names - resolve from global config
+      for (const serverName of skill.mcpServers) {
+        const globalServer = this.mcpServerRepo.findByName(serverName);
+        if (globalServer?.enabled) {
+          mcpServers[serverName] = this.toSdkServerConfig(globalServer);
+          console.log(`[SkillExecutor] Added MCP server: ${serverName}`);
+        } else {
+          console.warn(`[SkillExecutor] MCP server "${serverName}" not found or disabled`);
+        }
+      }
+    } else {
+      // Object with inline configs
+      for (const [name, config] of Object.entries(skill.mcpServers)) {
+        mcpServers[name] = {
+          type: "stdio",
+          command: config.command,
+          args: Array.isArray(config.args) ? config.args : [],
+          env: config.env,
+        };
+        console.log(`[SkillExecutor] Added inline MCP server: ${name}`);
       }
     }
 
-    return { output: finalOutput, toolCalls };
+    return mcpServers;
+  }
+
+  /**
+   * Convert a database MCP server record to SDK config format.
+   */
+  private toSdkServerConfig(server: McpServer): {
+    type: "stdio";
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+  } {
+    return {
+      type: "stdio",
+      command: server.command,
+      args: Array.isArray(server.args) ? server.args : [],
+      env: server.env ?? undefined,
+    };
   }
 
   buildSystemPrompt(skill: Skill, event: Event): string {

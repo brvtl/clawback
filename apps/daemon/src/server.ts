@@ -15,7 +15,6 @@ import {
 import { SkillRegistry } from "./skills/registry.js";
 import { SkillExecutor } from "./skills/executor.js";
 import { EventQueue } from "./services/queue.js";
-import { McpManager } from "./mcp/manager.js";
 import { NotificationService } from "./services/notifications.js";
 import { SchedulerService } from "./services/scheduler.js";
 import { RemoteSkillFetcher } from "./services/remote-skill-fetcher.js";
@@ -37,7 +36,6 @@ export interface ServerContext {
   skillRegistry: SkillRegistry;
   skillExecutor: SkillExecutor;
   eventQueue: EventQueue;
-  mcpManager: McpManager;
   notificationService: NotificationService;
   schedulerService: SchedulerService;
   remoteSkillFetcher: RemoteSkillFetcher;
@@ -73,9 +71,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const scheduledJobRepo = new ScheduledJobRepository(db);
   const workflowRepo = new WorkflowRepository(db);
 
-  // Initialize MCP manager
-  const mcpManager = new McpManager();
-
   // Initialize notification service
   const notificationService = new NotificationService({ enableDesktop: true });
 
@@ -106,7 +101,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     runRepo,
     notifRepo,
     mcpServerRepo,
-    mcpManager,
     skillRepo,
     remoteSkillFetcher,
     skillReviewer,
@@ -221,7 +215,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skillRegistry,
     skillExecutor,
     eventQueue,
-    mcpManager,
     notificationService,
     schedulerService,
     remoteSkillFetcher,

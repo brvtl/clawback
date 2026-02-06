@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SkillExecutor, type ExecutorDependencies } from "./executor.js";
 import type { Skill, Event } from "@clawback/shared";
-import type { RunRepository, NotificationRepository } from "@clawback/db";
-import { McpManager } from "../mcp/manager.js";
+import type { RunRepository, NotificationRepository, McpServerRepository } from "@clawback/db";
 
 describe("SkillExecutor", () => {
   let executor: SkillExecutor;
   let mockRunRepo: Partial<RunRepository>;
   let mockNotifRepo: Partial<NotificationRepository>;
+  let mockMcpServerRepo: Partial<McpServerRepository>;
   let mockDeps: ExecutorDependencies;
 
   const testSkill: Skill = {
@@ -18,17 +18,18 @@ describe("SkillExecutor", () => {
     mcpServers: {},
     toolPermissions: { allow: ["*"], deny: [] },
     notifications: { onComplete: true, onError: true },
+    isRemote: false,
   };
 
   const testEvent: Event = {
     id: "evt_123",
     source: "test",
     type: "test.event",
-    payload: JSON.stringify({ data: "test" }),
-    metadata: JSON.stringify({}),
+    payload: { data: "test" },
+    metadata: {},
     status: "pending",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   beforeEach(() => {
@@ -64,10 +65,15 @@ describe("SkillExecutor", () => {
       }),
     };
 
+    mockMcpServerRepo = {
+      findByName: vi.fn().mockReturnValue(null),
+      findAll: vi.fn().mockReturnValue([]),
+    };
+
     mockDeps = {
       runRepo: mockRunRepo as RunRepository,
       notifRepo: mockNotifRepo as NotificationRepository,
-      mcpManager: new McpManager(),
+      mcpServerRepo: mockMcpServerRepo as McpServerRepository,
       anthropicApiKey: "test-api-key",
     };
 
