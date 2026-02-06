@@ -250,8 +250,28 @@ export class SkillExecutor {
     }
 
     // Setup MCP servers if the skill has any configured
-    if (skill.mcpServers && Object.keys(skill.mcpServers).length > 0) {
-      this.mcpManager.setupServersForSkill(skill.mcpServers);
+    if (skill.mcpServers) {
+      if (Array.isArray(skill.mcpServers)) {
+        // Array of server names - resolve from global config
+        for (const serverName of skill.mcpServers) {
+          const globalServer = this.mcpServerRepo.findByName(serverName);
+          if (globalServer?.enabled) {
+            if (!this.mcpManager.hasServer(serverName)) {
+              this.mcpManager.registerServer(serverName, {
+                command: globalServer.command,
+                args: globalServer.args,
+                env: globalServer.env,
+              });
+            }
+            this.mcpManager.startServer(serverName);
+          } else {
+            console.warn(`[Executor] MCP server "${serverName}" not found or disabled`);
+          }
+        }
+      } else {
+        // Object with inline configs
+        this.mcpManager.setupServersForSkill(skill.mcpServers);
+      }
     }
 
     // Build tool permissions from skill config
