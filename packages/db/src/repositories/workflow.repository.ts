@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import {
   workflows,
   workflowRuns,
@@ -181,6 +181,7 @@ export class WorkflowRepository {
       .select()
       .from(workflowRuns)
       .where(eq(workflowRuns.workflowId, workflowId))
+      .orderBy(desc(workflowRuns.createdAt))
       .all();
     return results.map((r) => this.runToDomain(r));
   }
