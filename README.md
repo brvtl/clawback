@@ -144,16 +144,13 @@ Skills reference MCP servers by name:
 
 ## Environment Variables
 
-| Variable            | Default         | Description                 |
-| ------------------- | --------------- | --------------------------- |
-| `PORT`              | `3000`          | Server port                 |
-| `HOST`              | `0.0.0.0`       | Server host                 |
-| `DATABASE_URL`      | `./clawback.db` | SQLite database path        |
-| `SKILLS_DIR`        | `./skills`      | Skills directory            |
-| `ANTHROPIC_API_KEY` | -               | Claude API key (optional\*) |
-| `CLAUDE_BACKEND`    | `auto`          | `sdk`, `api`, or `auto`     |
-
-\*The Claude Agent SDK can use its own authentication when running locally.
+| Variable            | Default         | Description                           |
+| ------------------- | --------------- | ------------------------------------- |
+| `PORT`              | `3000`          | Server port                           |
+| `HOST`              | `0.0.0.0`       | Server host                           |
+| `DATABASE_URL`      | `./clawback.db` | SQLite database path                  |
+| `SKILLS_DIR`        | `./skills`      | Skills directory                      |
+| `ANTHROPIC_API_KEY` | -               | Required for skill/workflow execution |
 
 ## Project Structure
 

@@ -1,7 +1,6 @@
 import { config } from "dotenv";
 import { createServer } from "./server.js";
 import { createConnection } from "@clawback/db";
-import type { ClaudeBackend } from "./skills/executor.js";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 
@@ -18,7 +17,6 @@ const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const DB_PATH = process.env.DATABASE_URL ?? join(PROJECT_ROOT, "clawback.db");
 const SKILLS_DIR = process.env.SKILLS_DIR ?? join(PROJECT_ROOT, "skills");
-const CLAUDE_BACKEND = (process.env.CLAUDE_BACKEND as ClaudeBackend) ?? "auto";
 
 async function main() {
   // Initialize database
@@ -31,7 +29,6 @@ async function main() {
     },
     db,
     skillsDir: resolve(SKILLS_DIR),
-    claudeBackend: CLAUDE_BACKEND,
   });
 
   // Handle graceful shutdown
