@@ -189,6 +189,116 @@ const TOOLS = [
       required: ["name", "command"],
     },
   },
+  {
+    name: "list_workflows",
+    description:
+      "List all configured workflows in Clawback. Workflows orchestrate multiple skills with AI coordination.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "get_workflow",
+    description:
+      "Get full details of a specific workflow including its instructions and associated skills",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        workflow_id: {
+          type: "string",
+          description: "The workflow ID to get details for",
+        },
+      },
+      required: ["workflow_id"],
+    },
+  },
+  {
+    name: "create_workflow",
+    description:
+      "Create a new workflow in Clawback. Workflows use AI (Opus or Sonnet) to orchestrate multiple skills.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description: "Name of the workflow",
+        },
+        description: {
+          type: "string",
+          description: "Description of what the workflow does",
+        },
+        instructions: {
+          type: "string",
+          description:
+            "Detailed instructions for the AI orchestrator on how to coordinate the skills",
+        },
+        triggers: {
+          type: "array",
+          description: "Array of triggers that activate this workflow",
+          items: {
+            type: "object",
+            properties: {
+              source: {
+                type: "string",
+                description: "Event source (github, slack, webhook, cron, api)",
+              },
+              events: {
+                type: "array",
+                items: { type: "string" },
+                description: "Event types to match",
+              },
+              schedule: { type: "string", description: "Cron expression for scheduled triggers" },
+            },
+          },
+        },
+        skills: {
+          type: "array",
+          description: "Array of skill IDs that this workflow can orchestrate",
+          items: { type: "string" },
+        },
+        orchestratorModel: {
+          type: "string",
+          description: "AI model for orchestration: 'opus' (most capable) or 'sonnet' (faster)",
+          enum: ["opus", "sonnet"],
+        },
+      },
+      required: ["name", "instructions", "triggers", "skills"],
+    },
+  },
+  {
+    name: "trigger_workflow",
+    description: "Manually trigger a workflow to run immediately",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        workflow_id: {
+          type: "string",
+          description: "The workflow ID to trigger",
+        },
+        payload: {
+          type: "object",
+          description: "Optional payload data to pass to the workflow",
+        },
+      },
+      required: ["workflow_id"],
+    },
+  },
+  {
+    name: "list_workflow_runs",
+    description: "List recent runs of a specific workflow",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        workflow_id: {
+          type: "string",
+          description: "The workflow ID to list runs for",
+        },
+      },
+      required: ["workflow_id"],
+    },
+  },
 ];
 
 // Handle tool calls
@@ -249,6 +359,46 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
         body: JSON.stringify(args),
       });
       return data.server;
+    }
+
+    case "list_workflows": {
+      const data = await callApi<{ workflows: unknown[] }>("/api/workflows");
+      return data.workflows;
+    }
+
+    case "get_workflow": {
+      const workflowId = args.workflow_id as string;
+      const data = await callApi<{ workflow: unknown; skills: unknown[] }>(
+        `/api/workflows/${workflowId}`
+      );
+      return data;
+    }
+
+    case "create_workflow": {
+      const data = await callApi<{ workflow: unknown }>("/api/workflows", {
+        method: "POST",
+        body: JSON.stringify(args),
+      });
+      return data.workflow;
+    }
+
+    case "trigger_workflow": {
+      const workflowId = args.workflow_id as string;
+      const payload = args.payload as Record<string, unknown> | undefined;
+      const data = await callApi<{ workflowRun: unknown; event: unknown }>(
+        `/api/workflows/${workflowId}/trigger`,
+        {
+          method: "POST",
+          body: JSON.stringify({ payload }),
+        }
+      );
+      return data;
+    }
+
+    case "list_workflow_runs": {
+      const workflowId = args.workflow_id as string;
+      const data = await callApi<{ runs: unknown[] }>(`/api/workflows/${workflowId}/runs`);
+      return data.runs;
     }
 
     default:

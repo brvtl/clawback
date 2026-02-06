@@ -49,10 +49,17 @@ export const skills = sqliteTable("skills", {
     .default('{"onComplete":false,"onError":true}'), // JSON
   knowledge: text("knowledge"), // JSON array of file paths
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-  source: text("source", { enum: ["file", "api"] })
+  source: text("source", { enum: ["file", "api", "remote"] })
     .notNull()
     .default("api"), // Where skill was created
   filePath: text("file_path"), // Original file path if loaded from disk
+  // Remote skill fields
+  sourceUrl: text("source_url"), // URL for remote skills
+  isRemote: integer("is_remote", { mode: "boolean" }).default(false),
+  contentHash: text("content_hash"), // SHA-256 of remote content for caching reviews
+  lastFetchedAt: integer("last_fetched_at", { mode: "number" }),
+  reviewStatus: text("review_status", { enum: ["pending", "approved", "rejected"] }),
+  reviewResult: text("review_result"), // JSON with review details
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
@@ -66,6 +73,59 @@ export const mcpServers = sqliteTable("mcp_servers", {
   args: text("args").notNull().default("[]"), // JSON array of args
   env: text("env").notNull().default("{}"), // JSON object of env vars (credentials stored here)
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
+// Scheduled Jobs table - tracks cron-triggered skill executions
+export const scheduledJobs = sqliteTable("scheduled_jobs", {
+  id: text("id").primaryKey(),
+  skillId: text("skill_id")
+    .notNull()
+    .references(() => skills.id),
+  triggerIndex: integer("trigger_index").notNull(), // Index of the trigger in skill.triggers array
+  schedule: text("schedule").notNull(), // Cron expression
+  lastRunAt: integer("last_run_at", { mode: "number" }),
+  nextRunAt: integer("next_run_at", { mode: "number" }).notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).default(true),
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
+// Workflows table - AI-orchestrated multi-skill workflows
+export const workflows = sqliteTable("workflows", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  instructions: text("instructions").notNull(), // Instructions for the orchestrator AI
+  triggers: text("triggers").notNull(), // JSON array of triggers (same as skills)
+  skills: text("skills").notNull(), // JSON array of skill IDs available to orchestrator
+  orchestratorModel: text("orchestrator_model", { enum: ["opus", "sonnet"] })
+    .notNull()
+    .default("opus"),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
+// Workflow Runs table - tracks workflow executions
+export const workflowRuns = sqliteTable("workflow_runs", {
+  id: text("id").primaryKey(),
+  workflowId: text("workflow_id")
+    .notNull()
+    .references(() => workflows.id),
+  eventId: text("event_id")
+    .notNull()
+    .references(() => events.id),
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "cancelled"] })
+    .notNull()
+    .default("pending"),
+  input: text("input").notNull(), // JSON string - trigger event payload
+  output: text("output"), // JSON string - final result/summary
+  error: text("error"),
+  skillRuns: text("skill_runs").notNull().default("[]"), // JSON array of skill run IDs in order
+  startedAt: integer("started_at", { mode: "number" }),
+  completedAt: integer("completed_at", { mode: "number" }),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
@@ -99,3 +159,12 @@ export type NewNotification = typeof notifications.$inferInsert;
 
 export type DbMcpServer = typeof mcpServers.$inferSelect;
 export type NewDbMcpServer = typeof mcpServers.$inferInsert;
+
+export type ScheduledJob = typeof scheduledJobs.$inferSelect;
+export type NewScheduledJob = typeof scheduledJobs.$inferInsert;
+
+export type DbWorkflow = typeof workflows.$inferSelect;
+export type NewDbWorkflow = typeof workflows.$inferInsert;
+
+export type WorkflowRun = typeof workflowRuns.$inferSelect;
+export type NewWorkflowRun = typeof workflowRuns.$inferInsert;

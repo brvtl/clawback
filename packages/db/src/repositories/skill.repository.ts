@@ -7,20 +7,31 @@ import type {
   McpServerConfig,
   ToolPermissions,
   NotificationSettings,
+  ReviewStatus,
+  ReviewResult,
 } from "@clawback/shared";
 import { generateSkillId } from "@clawback/shared";
+
+// MCP servers can be array of strings (global refs) or record of configs
+export type McpServersInput = string[] | Record<string, McpServerConfig>;
 
 export interface CreateSkillInput {
   name: string;
   description?: string;
   instructions: string;
   triggers: Trigger[];
-  mcpServers?: Record<string, McpServerConfig>;
+  mcpServers?: McpServersInput;
   toolPermissions?: ToolPermissions;
   notifications?: NotificationSettings;
   knowledge?: string[];
-  source?: "file" | "api";
+  source?: "file" | "api" | "remote";
   filePath?: string;
+  // Remote skill fields
+  sourceUrl?: string;
+  isRemote?: boolean;
+  contentHash?: string;
+  reviewStatus?: ReviewStatus;
+  reviewResult?: ReviewResult;
 }
 
 export interface UpdateSkillInput {
@@ -28,11 +39,15 @@ export interface UpdateSkillInput {
   description?: string | undefined;
   instructions?: string | undefined;
   triggers?: Trigger[] | undefined;
-  mcpServers?: Record<string, McpServerConfig> | undefined;
+  mcpServers?: McpServersInput | undefined;
   toolPermissions?: ToolPermissions | undefined;
   notifications?: NotificationSettings | undefined;
   knowledge?: string[] | undefined;
   enabled?: boolean | undefined;
+  // Remote skill fields
+  contentHash?: string | undefined;
+  reviewStatus?: ReviewStatus | undefined;
+  reviewResult?: ReviewResult | undefined;
 }
 
 export class SkillRepository {
@@ -52,6 +67,15 @@ export class SkillRepository {
       toolPermissions: JSON.parse(dbSkill.toolPermissions) as ToolPermissions,
       notifications: JSON.parse(dbSkill.notifications) as NotificationSettings,
       knowledge: dbSkill.knowledge ? (JSON.parse(dbSkill.knowledge) as string[]) : undefined,
+      // Remote skill fields
+      sourceUrl: dbSkill.sourceUrl ?? undefined,
+      isRemote: dbSkill.isRemote ?? false,
+      contentHash: dbSkill.contentHash ?? undefined,
+      lastFetchedAt: dbSkill.lastFetchedAt ?? undefined,
+      reviewStatus: dbSkill.reviewStatus as ReviewStatus | undefined,
+      reviewResult: dbSkill.reviewResult
+        ? (JSON.parse(dbSkill.reviewResult) as ReviewResult)
+        : undefined,
     };
   }
 
@@ -72,6 +96,12 @@ export class SkillRepository {
       enabled: true,
       source: input.source ?? "api",
       filePath: input.filePath,
+      // Remote skill fields
+      sourceUrl: input.sourceUrl,
+      isRemote: input.isRemote ?? false,
+      contentHash: input.contentHash,
+      reviewStatus: input.reviewStatus,
+      reviewResult: input.reviewResult ? JSON.stringify(input.reviewResult) : null,
       createdAt: now,
       updatedAt: now,
     };
@@ -121,6 +151,10 @@ export class SkillRepository {
       updates.notifications = JSON.stringify(input.notifications);
     if (input.knowledge !== undefined) updates.knowledge = JSON.stringify(input.knowledge);
     if (input.enabled !== undefined) updates.enabled = input.enabled;
+    // Remote skill fields
+    if (input.contentHash !== undefined) updates.contentHash = input.contentHash;
+    if (input.reviewStatus !== undefined) updates.reviewStatus = input.reviewStatus;
+    if (input.reviewResult !== undefined) updates.reviewResult = JSON.stringify(input.reviewResult);
 
     this.db.update(skills).set(updates).where(eq(skills.id, id)).run();
 
@@ -163,5 +197,85 @@ export class SkillRepository {
       .where(eq(skills.id, id))
       .run();
     return result.changes > 0;
+  }
+
+  findBySourceUrl(sourceUrl: string): Skill | undefined {
+    const result = this.db.select().from(skills).where(eq(skills.sourceUrl, sourceUrl)).get();
+    return result ? this.toDomain(result) : undefined;
+  }
+
+  findRemoteSkills(): Skill[] {
+    const results = this.db.select().from(skills).where(eq(skills.isRemote, true)).all();
+    return results.map((r) => this.toDomain(r));
+  }
+
+  updateReviewStatus(id: string, status: ReviewStatus, result?: ReviewResult): Skill | undefined {
+    const existing = this.db.select().from(skills).where(eq(skills.id, id)).get();
+    if (!existing) {
+      return undefined;
+    }
+
+    this.db
+      .update(skills)
+      .set({
+        reviewStatus: status,
+        reviewResult: result ? JSON.stringify(result) : null,
+        updatedAt: Date.now(),
+      })
+      .where(eq(skills.id, id))
+      .run();
+
+    return this.findById(id);
+  }
+
+  updateContentHash(
+    id: string,
+    contentHash: string,
+    lastFetchedAt: number = Date.now()
+  ): Skill | undefined {
+    const existing = this.db.select().from(skills).where(eq(skills.id, id)).get();
+    if (!existing) {
+      return undefined;
+    }
+
+    this.db
+      .update(skills)
+      .set({
+        contentHash,
+        lastFetchedAt,
+        updatedAt: Date.now(),
+      })
+      .where(eq(skills.id, id))
+      .run();
+
+    return this.findById(id);
+  }
+
+  upsertFromUrl(
+    sourceUrl: string,
+    input: Omit<CreateSkillInput, "source" | "sourceUrl" | "isRemote">
+  ): Skill {
+    const existing = this.findBySourceUrl(sourceUrl);
+
+    if (existing) {
+      const updated = this.update(existing.id, {
+        name: input.name,
+        description: input.description,
+        instructions: input.instructions,
+        triggers: input.triggers,
+        mcpServers: input.mcpServers,
+        toolPermissions: input.toolPermissions,
+        notifications: input.notifications,
+        knowledge: input.knowledge,
+      });
+      return updated!;
+    }
+
+    return this.create({
+      ...input,
+      source: "remote",
+      sourceUrl,
+      isRemote: true,
+    });
   }
 }

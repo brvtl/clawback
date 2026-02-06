@@ -76,6 +76,39 @@ export interface ApiMcpServer {
   updatedAt: number;
 }
 
+export interface ApiWorkflow {
+  id: string;
+  name: string;
+  description?: string;
+  instructions: string;
+  triggers: Array<{
+    source: string;
+    events?: string[];
+    schedule?: string;
+    filters?: { repository?: string; ref?: string[] };
+  }>;
+  skills: string[];
+  orchestratorModel: "opus" | "sonnet";
+  enabled: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface ApiWorkflowRun {
+  id: string;
+  workflowId: string;
+  eventId: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  input: unknown;
+  output?: unknown;
+  error?: string;
+  skillRuns: string[];
+  startedAt?: number;
+  completedAt?: number;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -257,6 +290,76 @@ class ApiClient {
     return this.fetch<{ success: boolean }>(`/api/mcp-servers/${id}`, {
       method: "DELETE",
     });
+  }
+
+  // Workflow methods
+  async getWorkflows(): Promise<{ workflows: ApiWorkflow[] }> {
+    return this.fetch<{ workflows: ApiWorkflow[] }>("/api/workflows");
+  }
+
+  async getWorkflow(id: string): Promise<{ workflow: ApiWorkflow; skills: ApiSkill[] }> {
+    return this.fetch<{ workflow: ApiWorkflow; skills: ApiSkill[] }>(`/api/workflows/${id}`);
+  }
+
+  async createWorkflow(input: {
+    name: string;
+    description?: string;
+    instructions: string;
+    triggers: Array<{
+      source: string;
+      events?: string[];
+      schedule?: string;
+      filters?: { repository?: string; ref?: string[] };
+    }>;
+    skills: string[];
+    orchestratorModel?: "opus" | "sonnet";
+  }): Promise<{ workflow: ApiWorkflow }> {
+    return this.fetch<{ workflow: ApiWorkflow }>("/api/workflows", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async updateWorkflow(
+    id: string,
+    updates: Partial<Omit<ApiWorkflow, "id">>
+  ): Promise<{ workflow: ApiWorkflow }> {
+    return this.fetch<{ workflow: ApiWorkflow }>(`/api/workflows/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteWorkflow(id: string): Promise<{ success: boolean }> {
+    return this.fetch<{ success: boolean }>(`/api/workflows/${id}`, {
+      method: "DELETE",
+    });
+  }
+
+  async getWorkflowRuns(workflowId: string): Promise<{ runs: ApiWorkflowRun[] }> {
+    return this.fetch<{ runs: ApiWorkflowRun[] }>(`/api/workflows/${workflowId}/runs`);
+  }
+
+  async getWorkflowRun(
+    workflowId: string,
+    runId: string
+  ): Promise<{ run: ApiWorkflowRun; skillRuns: ApiRun[] }> {
+    return this.fetch<{ run: ApiWorkflowRun; skillRuns: ApiRun[] }>(
+      `/api/workflows/${workflowId}/runs/${runId}`
+    );
+  }
+
+  async triggerWorkflow(
+    id: string,
+    payload?: Record<string, unknown>
+  ): Promise<{ workflowRun: ApiWorkflowRun; event: ApiEvent }> {
+    return this.fetch<{ workflowRun: ApiWorkflowRun; event: ApiEvent }>(
+      `/api/workflows/${id}/trigger`,
+      {
+        method: "POST",
+        body: JSON.stringify({ payload }),
+      }
+    );
   }
 }
 

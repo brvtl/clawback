@@ -24,3 +24,15 @@ export function generateToolCallId(): string {
 export function generateSkillId(): string {
   return generateId("skill");
 }
+
+export function generateScheduledJobId(): string {
+  return generateId("job");
+}
+
+export function generateWorkflowId(): string {
+  return generateId("wf");
+}
+
+export function generateWorkflowRunId(): string {
+  return generateId("wfrun");
+}

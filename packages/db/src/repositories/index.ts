@@ -3,3 +3,5 @@ export * from "./run.repository.js";
 export * from "./notification.repository.js";
 export * from "./skill.repository.js";
 export * from "./mcp-server.repository.js";
+export * from "./scheduled-job.repository.js";
+export * from "./workflow.repository.js";

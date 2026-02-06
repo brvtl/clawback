@@ -97,6 +97,12 @@ export class SkillRegistry {
         toolPermissions: skill.toolPermissions,
         notifications: skill.notifications,
         knowledge: skill.knowledge,
+        // Remote skill fields
+        sourceUrl: skill.sourceUrl,
+        isRemote: skill.isRemote,
+        contentHash: skill.contentHash,
+        reviewStatus: skill.reviewStatus,
+        reviewResult: skill.reviewResult,
       });
       this.cache.set(created.id, created);
       return created;
@@ -122,10 +128,25 @@ export class SkillRegistry {
   ): SkillMatch[] {
     const matches: SkillMatch[] = [];
 
+    // Special handling for cron events - match by skillId in payload
+    if (source === "cron" && eventType === "scheduled" && payload?.skillId) {
+      const skillId = payload.skillId as string;
+      const skill = this.cache.get(skillId);
+      if (skill) {
+        return [{ skill, confidence: 1.0 }];
+      }
+      return [];
+    }
+
     for (const skill of this.cache.values()) {
       for (const trigger of skill.triggers) {
         // Check source match
         if (trigger.source !== source && trigger.source !== "*") {
+          continue;
+        }
+
+        // Skip cron triggers for non-cron sources (cron events handled above)
+        if (trigger.source === "cron") {
           continue;
         }
 
@@ -160,6 +181,24 @@ export class SkillRegistry {
 
     // Sort by confidence (highest first)
     return matches.sort((a, b) => b.confidence - a.confidence);
+  }
+
+  /**
+   * Find skills with cron triggers (for scheduler sync)
+   */
+  findScheduledSkills(): Array<{ skill: Skill; triggerIndex: number; schedule: string }> {
+    const results: Array<{ skill: Skill; triggerIndex: number; schedule: string }> = [];
+
+    for (const skill of this.cache.values()) {
+      for (let i = 0; i < skill.triggers.length; i++) {
+        const trigger = skill.triggers[i];
+        if (trigger.source === "cron" && trigger.schedule) {
+          results.push({ skill, triggerIndex: i, schedule: trigger.schedule });
+        }
+      }
+    }
+
+    return results;
   }
 
   private matchesFilters(filters: TriggerFilter, payload: Record<string, unknown>): boolean {

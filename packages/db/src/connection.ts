@@ -83,8 +83,27 @@ export function createTestConnection(): DatabaseConnection {
       enabled INTEGER NOT NULL DEFAULT 1,
       source TEXT NOT NULL DEFAULT 'api',
       file_path TEXT,
+      source_url TEXT,
+      is_remote INTEGER DEFAULT 0,
+      content_hash TEXT,
+      last_fetched_at INTEGER,
+      review_status TEXT,
+      review_result TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS scheduled_jobs (
+      id TEXT PRIMARY KEY,
+      skill_id TEXT NOT NULL,
+      trigger_index INTEGER NOT NULL,
+      schedule TEXT NOT NULL,
+      last_run_at INTEGER,
+      next_run_at INTEGER NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (skill_id) REFERENCES skills(id)
     );
 
     CREATE TABLE IF NOT EXISTS notifications (
@@ -97,6 +116,48 @@ export function createTestConnection(): DatabaseConnection {
       read INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (run_id) REFERENCES runs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      command TEXT NOT NULL,
+      args TEXT NOT NULL DEFAULT '[]',
+      env TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS workflows (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      instructions TEXT NOT NULL,
+      triggers TEXT NOT NULL,
+      skills TEXT NOT NULL,
+      orchestrator_model TEXT NOT NULL DEFAULT 'opus',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      input TEXT NOT NULL,
+      output TEXT,
+      error TEXT,
+      skill_runs TEXT NOT NULL DEFAULT '[]',
+      started_at INTEGER,
+      completed_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (workflow_id) REFERENCES workflows(id),
+      FOREIGN KEY (event_id) REFERENCES events(id)
     );
   `);
 

@@ -6,6 +6,7 @@
     { href: "/", label: "Dashboard", icon: "home" },
     { href: "/builder", label: "Builder", icon: "wand" },
     { href: "/skills", label: "Skills", icon: "cpu" },
+    { href: "/workflows", label: "Workflows", icon: "workflow" },
     { href: "/events", label: "Events", icon: "inbox" },
     { href: "/runs", label: "Runs", icon: "play" },
     { href: "/settings", label: "Settings", icon: "settings" },
@@ -43,11 +44,13 @@
                   ? "✨"
                   : item.icon === "cpu"
                     ? "⚙️"
-                    : item.icon === "inbox"
-                      ? "📥"
-                      : item.icon === "play"
-                        ? "▶️"
-                        : "⚙️"}</span
+                    : item.icon === "workflow"
+                      ? "🔀"
+                      : item.icon === "inbox"
+                        ? "📥"
+                        : item.icon === "play"
+                          ? "▶️"
+                          : "⚙️"}</span
             >
             <span>{item.label}</span>
           </a>

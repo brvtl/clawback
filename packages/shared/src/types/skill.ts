@@ -48,6 +48,18 @@ export const McpServersSchema = z
   ])
   .default({});
 
+export const ReviewStatusSchema = z.enum(["pending", "approved", "rejected"]);
+export type ReviewStatus = z.infer<typeof ReviewStatusSchema>;
+
+export const ReviewResultSchema = z.object({
+  approved: z.boolean(),
+  concerns: z.array(z.string()).default([]),
+  riskLevel: z.enum(["low", "medium", "high"]).optional(),
+  summary: z.string().optional(),
+  reviewedAt: z.number().optional(),
+});
+export type ReviewResult = z.infer<typeof ReviewResultSchema>;
+
 export const SkillSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -58,6 +70,13 @@ export const SkillSchema = z.object({
   toolPermissions: ToolPermissionsSchema.default({ allow: ["*"], deny: [] }),
   notifications: NotificationSettingsSchema.default({ onComplete: false, onError: true }),
   knowledge: z.array(z.string()).optional(),
+  // Remote skill fields
+  sourceUrl: z.string().optional(),
+  isRemote: z.boolean().default(false),
+  contentHash: z.string().optional(),
+  lastFetchedAt: z.number().optional(),
+  reviewStatus: ReviewStatusSchema.optional(),
+  reviewResult: ReviewResultSchema.optional(),
 });
 
 export type Skill = z.infer<typeof SkillSchema>;

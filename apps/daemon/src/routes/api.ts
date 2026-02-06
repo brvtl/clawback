@@ -83,8 +83,140 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       knowledge: body.knowledge,
     });
 
+    // Sync scheduled jobs if skill has cron triggers
+    const hasCronTrigger = skill.triggers.some((t) => t.source === "cron" && t.schedule);
+    if (hasCronTrigger) {
+      context.schedulerService.syncJobsFromSkills();
+    }
+
     return reply.status(201).send({ skill });
   });
+
+  // Import remote skill from URL
+  server.post("/api/skills/remote", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as {
+      sourceUrl: string;
+      name?: string;
+    };
+
+    if (!body.sourceUrl) {
+      return reply.status(400).send({ error: "sourceUrl is required" });
+    }
+
+    // Validate URL
+    const urlValidation = context.remoteSkillFetcher.validateUrl(body.sourceUrl);
+    if (!urlValidation.valid) {
+      return reply.status(400).send({ error: urlValidation.error });
+    }
+
+    try {
+      // Fetch the skill
+      const fetched = await context.remoteSkillFetcher.fetch(body.sourceUrl);
+
+      // Run AI review
+      let knowledgeContent: string | undefined;
+      if (fetched.knowledgeFiles.size > 0) {
+        knowledgeContent = Array.from(fetched.knowledgeFiles.entries())
+          .map(([path, content]) => `### ${path}\n${content}`)
+          .join("\n\n");
+      }
+
+      const reviewResult = await context.skillReviewer.review(fetched.contentHash, {
+        instructions: fetched.skillMarkdown.instructions,
+        knowledgeContent,
+        toolPermissions: fetched.skillMarkdown.toolPermissions,
+        mcpServers: fetched.skillMarkdown.mcpServers
+          ? Array.isArray(fetched.skillMarkdown.mcpServers)
+            ? fetched.skillMarkdown.mcpServers
+            : Object.keys(fetched.skillMarkdown.mcpServers)
+          : undefined,
+      });
+
+      // Create the skill with review status
+      const skill = context.skillRegistry.registerSkill({
+        id: "", // Will be generated
+        name: body.name ?? fetched.skillMarkdown.name ?? "Remote Skill",
+        description: fetched.skillMarkdown.description,
+        instructions: fetched.skillMarkdown.instructions,
+        triggers: fetched.skillMarkdown.triggers,
+        mcpServers: fetched.skillMarkdown.mcpServers ?? {},
+        toolPermissions: { allow: ["Read", "Glob", "Grep", "WebFetch", "WebSearch"], deny: [] },
+        notifications: fetched.skillMarkdown.notifications ?? { onComplete: false, onError: true },
+        knowledge: fetched.skillMarkdown.knowledge,
+        sourceUrl: body.sourceUrl,
+        isRemote: true,
+        contentHash: fetched.contentHash,
+        reviewStatus: reviewResult.approved ? "approved" : "rejected",
+        reviewResult,
+      });
+
+      // Sync scheduled jobs if skill has cron triggers
+      const hasCronTrigger = skill.triggers.some((t) => t.source === "cron" && t.schedule);
+      if (hasCronTrigger) {
+        context.schedulerService.syncJobsFromSkills();
+      }
+
+      return reply.status(201).send({
+        skill,
+        reviewResult,
+        warnings: reviewResult.approved ? undefined : reviewResult.concerns,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to import remote skill";
+      return reply.status(400).send({ error: message });
+    }
+  });
+
+  // Manually trigger re-review for a remote skill
+  server.post<{ Params: { id: string } }>(
+    "/api/skills/:id/review",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const skill = context.skillRegistry.getSkill(request.params.id);
+      if (!skill) {
+        return reply.status(404).send({ error: "Skill not found" });
+      }
+
+      if (!skill.isRemote || !skill.sourceUrl) {
+        return reply.status(400).send({ error: "Only remote skills can be reviewed" });
+      }
+
+      try {
+        // Fetch fresh content
+        const fetched = await context.remoteSkillFetcher.fetch(skill.sourceUrl);
+
+        // Build knowledge content
+        let knowledgeContent: string | undefined;
+        if (fetched.knowledgeFiles.size > 0) {
+          knowledgeContent = Array.from(fetched.knowledgeFiles.entries())
+            .map(([path, content]) => `### ${path}\n${content}`)
+            .join("\n\n");
+        }
+
+        // Clear cache and run fresh review
+        context.skillReviewer.clearCache();
+        const reviewResult = await context.skillReviewer.review(fetched.contentHash, {
+          instructions: fetched.skillMarkdown.instructions,
+          knowledgeContent,
+          toolPermissions: skill.toolPermissions,
+        });
+
+        // Update skill with new review
+        const updatedSkill = context.skillRegistry.updateSkill(skill.id, {
+          contentHash: fetched.contentHash,
+          reviewStatus: reviewResult.approved ? "approved" : "rejected",
+          reviewResult,
+        });
+
+        return reply.send({
+          skill: updatedSkill,
+          reviewResult,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Review failed";
+        return reply.status(400).send({ error: message });
+      }
+    }
+  );
 
   // Get skill by ID
   server.get<{ Params: { id: string } }>(
@@ -366,6 +498,299 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         return reply.status(404).send({ error: "MCP server not found" });
       }
       return reply.send({ success: true });
+    }
+  );
+
+  // ======================
+  // Scheduled Jobs Endpoints
+  // ======================
+
+  // List scheduled jobs
+  server.get("/api/scheduled-jobs", async (_request: FastifyRequest, reply: FastifyReply) => {
+    const jobs = context.scheduledJobRepo.findAll();
+
+    // Enrich jobs with skill info
+    const enrichedJobs = jobs.map((job) => {
+      const skill = context.skillRegistry.getSkill(job.skillId);
+      return {
+        ...job,
+        skillName: skill?.name ?? "Unknown",
+        nextRunFormatted: new Date(job.nextRunAt).toISOString(),
+        lastRunFormatted: job.lastRunAt ? new Date(job.lastRunAt).toISOString() : null,
+      };
+    });
+
+    return reply.send({ jobs: enrichedJobs });
+  });
+
+  // Get scheduled job by ID
+  server.get<{ Params: { id: string } }>(
+    "/api/scheduled-jobs/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const job = context.scheduledJobRepo.findById(request.params.id);
+      if (!job) {
+        return reply.status(404).send({ error: "Scheduled job not found" });
+      }
+
+      const skill = context.skillRegistry.getSkill(job.skillId);
+      const nextRuns = context.schedulerService.getNextRuns(job.schedule, 5);
+
+      return reply.send({
+        job: {
+          ...job,
+          skillName: skill?.name ?? "Unknown",
+          nextRunFormatted: new Date(job.nextRunAt).toISOString(),
+          lastRunFormatted: job.lastRunAt ? new Date(job.lastRunAt).toISOString() : null,
+        },
+        upcomingRuns: nextRuns.map((d) => d.toISOString()),
+      });
+    }
+  );
+
+  // Enable/disable scheduled job
+  server.patch<{ Params: { id: string } }>(
+    "/api/scheduled-jobs/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const body = request.body as { enabled?: boolean };
+
+      const job = context.scheduledJobRepo.findById(request.params.id);
+      if (!job) {
+        return reply.status(404).send({ error: "Scheduled job not found" });
+      }
+
+      if (body.enabled !== undefined) {
+        context.scheduledJobRepo.setEnabled(request.params.id, body.enabled);
+      }
+
+      const updated = context.scheduledJobRepo.findById(request.params.id);
+      return reply.send({ job: updated });
+    }
+  );
+
+  // Validate cron expression
+  server.post(
+    "/api/scheduled-jobs/validate",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = request.body as { schedule: string };
+
+      if (!body.schedule) {
+        return reply.status(400).send({ error: "schedule is required" });
+      }
+
+      const validation = context.schedulerService.validateSchedule(body.schedule);
+      if (!validation.valid) {
+        return reply.status(400).send({ valid: false, error: validation.error });
+      }
+
+      const nextRuns = context.schedulerService.getNextRuns(body.schedule, 5);
+      return reply.send({
+        valid: true,
+        upcomingRuns: nextRuns.map((d) => d.toISOString()),
+      });
+    }
+  );
+
+  // ======================
+  // Workflow Endpoints
+  // ======================
+
+  // List workflows
+  server.get("/api/workflows", async (_request: FastifyRequest, reply: FastifyReply) => {
+    const workflows = context.workflowRegistry.listWorkflows();
+    return reply.send({ workflows });
+  });
+
+  // Get workflow by ID
+  server.get<{ Params: { id: string } }>(
+    "/api/workflows/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const workflow = context.workflowRegistry.getWorkflow(request.params.id);
+      if (!workflow) {
+        return reply.status(404).send({ error: "Workflow not found" });
+      }
+
+      // Get associated skills
+      const skills = workflow.skills
+        .map((skillId) => context.skillRegistry.getSkill(skillId))
+        .filter(Boolean);
+
+      return reply.send({ workflow, skills });
+    }
+  );
+
+  // Create workflow
+  server.post("/api/workflows", async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as {
+      name: string;
+      description?: string;
+      instructions: string;
+      triggers: Array<{
+        source: string;
+        events?: string[];
+        schedule?: string;
+        filters?: { repository?: string; ref?: string[] };
+      }>;
+      skills: string[];
+      orchestratorModel?: "opus" | "sonnet";
+    };
+
+    if (!body.name || !body.instructions || !body.triggers || !body.skills) {
+      return reply.status(400).send({
+        error: "name, instructions, triggers, and skills are required",
+      });
+    }
+
+    // Validate that referenced skills exist
+    const invalidSkills = body.skills.filter((id) => !context.skillRegistry.getSkill(id));
+    if (invalidSkills.length > 0) {
+      return reply.status(400).send({
+        error: `Skills not found: ${invalidSkills.join(", ")}`,
+      });
+    }
+
+    const workflow = context.workflowRegistry.registerWorkflow({
+      id: "", // Will be generated
+      name: body.name,
+      description: body.description,
+      instructions: body.instructions,
+      triggers: body.triggers,
+      skills: body.skills,
+      orchestratorModel: body.orchestratorModel ?? "opus",
+      enabled: true,
+    });
+
+    return reply.status(201).send({ workflow });
+  });
+
+  // Update workflow
+  server.put<{ Params: { id: string } }>(
+    "/api/workflows/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const existing = context.workflowRegistry.getWorkflow(request.params.id);
+      if (!existing) {
+        return reply.status(404).send({ error: "Workflow not found" });
+      }
+
+      const body = request.body as {
+        name?: string;
+        description?: string;
+        instructions?: string;
+        triggers?: Array<{
+          source: string;
+          events?: string[];
+          schedule?: string;
+          filters?: { repository?: string; ref?: string[] };
+        }>;
+        skills?: string[];
+        orchestratorModel?: "opus" | "sonnet";
+        enabled?: boolean;
+      };
+
+      // Validate that referenced skills exist if updating skills
+      if (body.skills) {
+        const invalidSkills = body.skills.filter((id) => !context.skillRegistry.getSkill(id));
+        if (invalidSkills.length > 0) {
+          return reply.status(400).send({
+            error: `Skills not found: ${invalidSkills.join(", ")}`,
+          });
+        }
+      }
+
+      const workflow = context.workflowRegistry.updateWorkflow(request.params.id, body);
+      if (!workflow) {
+        return reply.status(404).send({ error: "Workflow not found" });
+      }
+
+      return reply.send({ workflow });
+    }
+  );
+
+  // Delete workflow
+  server.delete<{ Params: { id: string } }>(
+    "/api/workflows/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const deleted = context.workflowRegistry.deleteWorkflow(request.params.id);
+      if (!deleted) {
+        return reply.status(404).send({ error: "Workflow not found" });
+      }
+      return reply.send({ success: true });
+    }
+  );
+
+  // List workflow runs
+  server.get<{ Params: { id: string }; Querystring: ListParams }>(
+    "/api/workflows/:id/runs",
+    async (
+      request: FastifyRequest<{ Params: { id: string }; Querystring: ListParams }>,
+      reply: FastifyReply
+    ) => {
+      const workflow = context.workflowRegistry.getWorkflow(request.params.id);
+      if (!workflow) {
+        return reply.status(404).send({ error: "Workflow not found" });
+      }
+
+      const runs = context.workflowRepo.findRunsByWorkflowId(request.params.id);
+      return reply.send({ runs });
+    }
+  );
+
+  // Get workflow run by ID
+  server.get<{ Params: { workflowId: string; runId: string } }>(
+    "/api/workflows/:workflowId/runs/:runId",
+    async (
+      request: FastifyRequest<{ Params: { workflowId: string; runId: string } }>,
+      reply: FastifyReply
+    ) => {
+      const run = context.workflowRepo.findRunById(request.params.runId);
+      if (!run || run.workflowId !== request.params.workflowId) {
+        return reply.status(404).send({ error: "Workflow run not found" });
+      }
+
+      // Get skill run details
+      const skillRuns = await Promise.all(
+        run.skillRuns.map((runId) => context.runRepo.findById(runId))
+      );
+
+      return reply.send({ run, skillRuns: skillRuns.filter(Boolean) });
+    }
+  );
+
+  // Manually trigger a workflow
+  server.post<{ Params: { id: string } }>(
+    "/api/workflows/:id/trigger",
+    async (
+      request: FastifyRequest<{
+        Params: { id: string };
+        Body: { payload?: Record<string, unknown> };
+      }>,
+      reply: FastifyReply
+    ) => {
+      const workflow = context.workflowRegistry.getWorkflow(request.params.id);
+      if (!workflow) {
+        return reply.status(404).send({ error: "Workflow not found" });
+      }
+
+      const payload = request.body?.payload ?? {};
+
+      // Create a manual trigger event
+      const event = await context.eventRepo.create({
+        source: "api",
+        type: "manual",
+        payload: { ...payload, manual: true, workflowId: workflow.id },
+        metadata: { triggeredBy: "api" },
+      });
+
+      // Create workflow run
+      const workflowRun = context.workflowRepo.createRun({
+        workflowId: workflow.id,
+        eventId: event.id,
+        input: payload,
+      });
+
+      // Execute async
+      void context.workflowExecutor.execute(workflow, event);
+
+      return reply.send({ workflowRun, event });
     }
   );
 }

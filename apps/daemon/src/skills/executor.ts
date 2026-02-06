@@ -1,16 +1,38 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { generateToolCallId, type Skill, type Event } from "@clawback/shared";
-import type { RunRepository, NotificationRepository, Run, McpServerRepository } from "@clawback/db";
+import {
+  generateToolCallId,
+  type Skill,
+  type Event,
+  type ToolPermissions as SharedToolPermissions,
+} from "@clawback/shared";
+import type {
+  RunRepository,
+  NotificationRepository,
+  Run,
+  McpServerRepository,
+  SkillRepository,
+} from "@clawback/db";
 import { McpManager, type ToolPermissions } from "../mcp/manager.js";
+import type { RemoteSkillFetcher } from "../services/remote-skill-fetcher.js";
+import type { SkillReviewer } from "../services/skill-reviewer.js";
 
 export type ClaudeBackend = "api" | "sdk" | "auto";
+
+// Default restricted permissions for remote skills
+const REMOTE_SKILL_PERMISSIONS: SharedToolPermissions = {
+  allow: ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+  deny: ["Write", "Edit", "Bash", "mcp__*"],
+};
 
 export interface ExecutorDependencies {
   runRepo: RunRepository;
   notifRepo: NotificationRepository;
   mcpServerRepo: McpServerRepository;
   mcpManager: McpManager;
+  skillRepo?: SkillRepository;
+  remoteSkillFetcher?: RemoteSkillFetcher;
+  skillReviewer?: SkillReviewer;
   anthropicApiKey?: string;
   claudeBackend?: ClaudeBackend;
 }
@@ -36,6 +58,9 @@ export class SkillExecutor {
   private notifRepo: NotificationRepository;
   private mcpServerRepo: McpServerRepository;
   private mcpManager: McpManager;
+  private skillRepo?: SkillRepository;
+  private remoteSkillFetcher?: RemoteSkillFetcher;
+  private skillReviewer?: SkillReviewer;
   private claudeBackend: ClaudeBackend;
 
   constructor(deps: ExecutorDependencies) {
@@ -43,6 +68,9 @@ export class SkillExecutor {
     this.notifRepo = deps.notifRepo;
     this.mcpServerRepo = deps.mcpServerRepo;
     this.mcpManager = deps.mcpManager;
+    this.skillRepo = deps.skillRepo;
+    this.remoteSkillFetcher = deps.remoteSkillFetcher;
+    this.skillReviewer = deps.skillReviewer;
     this.claudeBackend = deps.claudeBackend ?? "auto";
 
     if (deps.anthropicApiKey) {
@@ -56,10 +84,42 @@ export class SkillExecutor {
       typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
     ) as Record<string, unknown>;
 
+    // Handle remote skills - fetch fresh content and review if needed
+    let preparedSkill = skill;
+    if (skill.isRemote && skill.sourceUrl) {
+      try {
+        preparedSkill = await this.prepareRemoteSkill(skill);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Remote skill preparation failed";
+        console.error(`[Executor] Remote skill preparation failed for ${skill.id}:`, errorMessage);
+
+        // Create a failed run record
+        const run = await this.runRepo.create({
+          eventId: event.id,
+          skillId: skill.id,
+          input: { event: { source: event.source, type: event.type, payload } },
+        });
+        await this.runRepo.updateStatus(run.id, "failed", undefined, errorMessage);
+
+        if (skill.notifications?.onError) {
+          await this.notifRepo.create({
+            runId: run.id,
+            skillId: skill.id,
+            type: "error",
+            title: `${skill.name} failed`,
+            message: errorMessage,
+          });
+        }
+
+        throw error;
+      }
+    }
+
     // Create run record
     const run = await this.runRepo.create({
       eventId: event.id,
-      skillId: skill.id,
+      skillId: preparedSkill.id,
       input: {
         event: {
           source: event.source,
@@ -74,18 +134,18 @@ export class SkillExecutor {
       await this.runRepo.updateStatus(run.id, "running");
 
       // Run the agent loop
-      const result = await this.runAgentLoop(skill, event, run);
+      const result = await this.runAgentLoop(preparedSkill, event, run);
 
       // Update status to completed
       await this.runRepo.updateStatus(run.id, "completed", result.output, undefined);
 
       // Send notification if configured
-      if (skill.notifications?.onComplete) {
+      if (preparedSkill.notifications?.onComplete) {
         await this.notifRepo.create({
           runId: run.id,
-          skillId: skill.id,
+          skillId: preparedSkill.id,
           type: "success",
-          title: `${skill.name} completed`,
+          title: `${preparedSkill.name} completed`,
           message: `Successfully processed ${event.type} event`,
         });
       }
@@ -98,18 +158,91 @@ export class SkillExecutor {
       await this.runRepo.updateStatus(run.id, "failed", undefined, errorMessage);
 
       // Send error notification if configured
-      if (skill.notifications?.onError) {
+      if (preparedSkill.notifications?.onError) {
         await this.notifRepo.create({
           runId: run.id,
-          skillId: skill.id,
+          skillId: preparedSkill.id,
           type: "error",
-          title: `${skill.name} failed`,
+          title: `${preparedSkill.name} failed`,
           message: errorMessage,
         });
       }
 
       throw error;
     }
+  }
+
+  private async prepareRemoteSkill(skill: Skill): Promise<Skill> {
+    if (!this.remoteSkillFetcher || !this.skillReviewer || !this.skillRepo) {
+      throw new Error("Remote skill services not configured");
+    }
+
+    if (!skill.sourceUrl) {
+      throw new Error("Remote skill has no source URL");
+    }
+
+    console.log(`[Executor] Fetching remote skill from ${skill.sourceUrl}`);
+
+    // Fetch fresh content
+    const fetched = await this.remoteSkillFetcher.fetch(skill.sourceUrl);
+
+    // Check if content has changed
+    const contentChanged = fetched.contentHash !== skill.contentHash;
+    const needsReview = contentChanged || skill.reviewStatus !== "approved";
+
+    if (needsReview) {
+      console.log(`[Executor] Remote skill content changed or needs review, running AI review`);
+
+      // Build knowledge content for review
+      let knowledgeContent: string | undefined;
+      if (fetched.knowledgeFiles.size > 0) {
+        knowledgeContent = Array.from(fetched.knowledgeFiles.entries())
+          .map(([path, content]) => `### ${path}\n${content}`)
+          .join("\n\n");
+      }
+
+      // Run AI review
+      const reviewResult = await this.skillReviewer.review(fetched.contentHash, {
+        instructions: fetched.skillMarkdown.instructions,
+        knowledgeContent,
+        toolPermissions: skill.toolPermissions,
+        mcpServers: skill.mcpServers
+          ? Array.isArray(skill.mcpServers)
+            ? skill.mcpServers
+            : Object.keys(skill.mcpServers)
+          : undefined,
+      });
+
+      // Update skill with new content hash and review status
+      const reviewStatus = reviewResult.approved ? "approved" : "rejected";
+      this.skillRepo.updateContentHash(skill.id, fetched.contentHash);
+      this.skillRepo.updateReviewStatus(skill.id, reviewStatus, reviewResult);
+
+      if (!reviewResult.approved) {
+        const concerns = reviewResult.concerns.join("; ");
+        throw new Error(`Remote skill review failed: ${concerns}`);
+      }
+
+      // Update skill instructions with fresh content
+      const updatedSkill: Skill = {
+        ...skill,
+        instructions: fetched.skillMarkdown.instructions,
+        contentHash: fetched.contentHash,
+        reviewStatus: "approved",
+        reviewResult,
+        lastFetchedAt: Date.now(),
+        // Apply restricted permissions for remote skills
+        toolPermissions: REMOTE_SKILL_PERMISSIONS,
+      };
+
+      return updatedSkill;
+    }
+
+    // Content hasn't changed and is approved - use with restricted permissions
+    return {
+      ...skill,
+      toolPermissions: REMOTE_SKILL_PERMISSIONS,
+    };
   }
 
   private shouldUseSdk(): boolean {

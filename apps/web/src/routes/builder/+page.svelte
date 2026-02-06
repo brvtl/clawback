@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type ApiSkill, type ApiMcpServer } from "$lib/api/client";
+  import { api, type ApiSkill, type ApiMcpServer, type ApiWorkflow } from "$lib/api/client";
 
   interface Message {
     role: "user" | "assistant";
@@ -11,6 +11,7 @@
   let input = "";
   let loading = false;
   let skills: ApiSkill[] = [];
+  let workflows: ApiWorkflow[] = [];
   let mcpServers: ApiMcpServer[] = [];
 
   onMount(async () => {
@@ -19,11 +20,12 @@
     messages = [
       {
         role: "assistant",
-        content: `Welcome to the Skill Builder! I can help you:
+        content: `Welcome to the Automation Builder! I can help you:
 
-- **Create new skills** - Describe what you want to automate
+- **Create skills** - Single-purpose automations with MCP tools
+- **Create workflows** - AI-orchestrated multi-skill automations
 - **Configure MCP servers** - Set up GitHub, Slack, or other integrations
-- **Update existing skills** - Modify triggers, instructions, or permissions
+- **Update existing automations** - Modify triggers, instructions, or permissions
 
 What would you like to build today?`,
       },
@@ -32,8 +34,13 @@ What would you like to build today?`,
 
   async function loadContext() {
     try {
-      const [skillsRes, serversRes] = await Promise.all([api.getSkills(), api.getMcpServers()]);
+      const [skillsRes, workflowsRes, serversRes] = await Promise.all([
+        api.getSkills(),
+        api.getWorkflows(),
+        api.getMcpServers(),
+      ]);
       skills = skillsRes.skills;
+      workflows = workflowsRes.workflows;
       mcpServers = serversRes.servers;
     } catch (e) {
       console.error("Failed to load context:", e);
@@ -100,7 +107,14 @@ What would you like to build today?`,
   }
 
   interface Action {
-    type: "create_skill" | "update_skill" | "create_mcp_server" | "update_mcp_server";
+    type:
+      | "create_skill"
+      | "update_skill"
+      | "create_mcp_server"
+      | "update_mcp_server"
+      | "create_workflow"
+      | "update_workflow"
+      | "trigger_workflow";
     data: Record<string, unknown>;
   }
 
@@ -114,6 +128,12 @@ What would you like to build today?`,
         return "Created MCP server";
       case "update_mcp_server":
         return "Updated MCP server";
+      case "create_workflow":
+        return "Created workflow";
+      case "update_workflow":
+        return "Updated workflow";
+      case "trigger_workflow":
+        return "Triggered workflow";
     }
   }
 
@@ -135,6 +155,21 @@ What would you like to build today?`,
             : Object.keys(skill.mcpServers).join(", ");
           lines.push(`  MCP Servers: ${servers || "none"}`);
         }
+      }
+    }
+
+    lines.push("");
+    lines.push("## Current Workflows");
+    if (workflows.length === 0) {
+      lines.push("No workflows configured yet.");
+    } else {
+      for (const workflow of workflows) {
+        const status = workflow.enabled ? "enabled" : "disabled";
+        lines.push(`- **${workflow.name}** (${workflow.id}) [${status}]`);
+        lines.push(
+          `  Triggers: ${workflow.triggers.map((t) => `${t.source}:${t.events?.join(",") ?? "*"}`).join(", ")}`
+        );
+        lines.push(`  Skills: ${workflow.skills.length} | Model: ${workflow.orchestratorModel}`);
       }
     }
 
@@ -161,14 +196,14 @@ What would you like to build today?`,
 </script>
 
 <svelte:head>
-  <title>Skill Builder | Clawback</title>
+  <title>Automation Builder | Clawback</title>
 </svelte:head>
 
 <div class="flex flex-col h-[calc(100vh-2rem)] p-4">
   <div class="flex items-center justify-between mb-4">
-    <h1 class="text-2xl font-bold">Skill Builder</h1>
+    <h1 class="text-2xl font-bold">Automation Builder</h1>
     <div class="text-sm text-gray-400">
-      {skills.length} skills | {mcpServers.length} MCP servers
+      {skills.length} skills | {workflows.length} workflows | {mcpServers.length} MCP servers
     </div>
   </div>
 

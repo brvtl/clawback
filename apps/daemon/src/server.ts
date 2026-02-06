@@ -9,12 +9,19 @@ import {
   NotificationRepository,
   SkillRepository,
   McpServerRepository,
+  ScheduledJobRepository,
+  WorkflowRepository,
 } from "@clawback/db";
 import { SkillRegistry } from "./skills/registry.js";
 import { SkillExecutor, type ClaudeBackend } from "./skills/executor.js";
 import { EventQueue } from "./services/queue.js";
 import { McpManager } from "./mcp/manager.js";
 import { NotificationService } from "./services/notifications.js";
+import { SchedulerService } from "./services/scheduler.js";
+import { RemoteSkillFetcher } from "./services/remote-skill-fetcher.js";
+import { SkillReviewer } from "./services/skill-reviewer.js";
+import { WorkflowExecutor } from "./services/workflow-executor.js";
+import { WorkflowRegistry } from "./workflows/registry.js";
 import { registerWebhookRoutes } from "./routes/webhook.js";
 import { registerApiRoutes } from "./routes/api.js";
 import { registerBuilderRoutes } from "./routes/builder.js";
@@ -25,11 +32,18 @@ export interface ServerContext {
   runRepo: RunRepository;
   notifRepo: NotificationRepository;
   mcpServerRepo: McpServerRepository;
+  scheduledJobRepo: ScheduledJobRepository;
+  workflowRepo: WorkflowRepository;
   skillRegistry: SkillRegistry;
   skillExecutor: SkillExecutor;
   eventQueue: EventQueue;
   mcpManager: McpManager;
   notificationService: NotificationService;
+  schedulerService: SchedulerService;
+  remoteSkillFetcher: RemoteSkillFetcher;
+  skillReviewer: SkillReviewer;
+  workflowRegistry: WorkflowRegistry;
+  workflowExecutor: WorkflowExecutor;
 }
 
 export interface CreateServerOptions extends FastifyServerOptions {
@@ -58,6 +72,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const notifRepo = new NotificationRepository(db);
   const skillRepo = new SkillRepository(db);
   const mcpServerRepo = new McpServerRepository(db);
+  const scheduledJobRepo = new ScheduledJobRepository(db);
+  const workflowRepo = new WorkflowRepository(db);
 
   // Initialize MCP manager
   const mcpManager = new McpManager();
@@ -65,26 +81,59 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize notification service
   const notificationService = new NotificationService({ enableDesktop: true });
 
+  // Initialize remote skill services
+  const remoteSkillFetcher = new RemoteSkillFetcher();
+  const skillReviewer = new SkillReviewer({
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  });
+
   // Initialize skill registry with database backing
   const skillRegistry = new SkillRegistry(options.skillsDir ?? "./skills", skillRepo);
 
   // Load skills from database and sync with file system
   await skillRegistry.loadSkills();
 
-  // Initialize skill executor
+  // Initialize scheduler service
+  const schedulerService = new SchedulerService({
+    scheduledJobRepo,
+    skillRepo,
+    eventRepo,
+  });
+
+  // Sync scheduled jobs from skills with cron triggers
+  schedulerService.syncJobsFromSkills();
+
+  // Initialize skill executor with remote skill support
   const skillExecutor = new SkillExecutor({
     runRepo,
     notifRepo,
     mcpServerRepo,
     mcpManager,
+    skillRepo,
+    remoteSkillFetcher,
+    skillReviewer,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     claudeBackend: options.claudeBackend,
+  });
+
+  // Initialize workflow registry
+  const workflowRegistry = new WorkflowRegistry(workflowRepo);
+  workflowRegistry.loadWorkflows();
+
+  // Initialize workflow executor
+  const workflowExecutor = new WorkflowExecutor({
+    workflowRepo,
+    skillRepo,
+    eventRepo,
+    runRepo,
+    skillExecutor,
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   });
 
   // Initialize event queue
   const eventQueue = new EventQueue(eventRepo, skillRegistry);
 
-  // Wire up event processing: queue -> skill executor -> notifications
+  // Wire up event processing: queue -> skill/workflow executor -> notifications
   eventQueue.onEvent(async (event) => {
     // Parse event payload for filter matching
     const payload =
@@ -92,10 +141,44 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         ? (JSON.parse(event.payload) as Record<string, unknown>)
         : event.payload;
 
-    // Find matching skills for this event (with payload for filter matching)
-    const matches = skillRegistry.findMatchingSkills(event.source, event.type, payload);
+    // Find matching workflows for this event
+    const workflowMatches = workflowRegistry.findMatchingWorkflows(
+      event.source,
+      event.type,
+      payload
+    );
 
-    for (const { skill } of matches) {
+    for (const { workflow } of workflowMatches) {
+      try {
+        console.log(`[Server] Executing workflow "${workflow.name}" for event ${event.id}`);
+        const workflowRun = await workflowExecutor.execute(workflow, event);
+
+        await notificationService.notify({
+          id: `notif_wf_${workflowRun.id}`,
+          type: "success",
+          title: `Workflow "${workflow.name}" completed`,
+          message: `Successfully processed ${event.type} event`,
+          skillId: workflow.id,
+          runId: workflowRun.id,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        console.error(`Workflow ${workflow.id} failed for event ${event.id}:`, message);
+
+        await notificationService.notify({
+          id: `notif_wf_err_${event.id}_${workflow.id}`,
+          type: "error",
+          title: `Workflow "${workflow.name}" failed`,
+          message,
+          skillId: workflow.id,
+        });
+      }
+    }
+
+    // Find matching skills for this event (with payload for filter matching)
+    const skillMatches = skillRegistry.findMatchingSkills(event.source, event.type, payload);
+
+    for (const { skill } of skillMatches) {
       try {
         // Execute the skill
         const run = await skillExecutor.execute(skill, event);
@@ -136,11 +219,18 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     runRepo,
     notifRepo,
     mcpServerRepo,
+    scheduledJobRepo,
+    workflowRepo,
     skillRegistry,
     skillExecutor,
     eventQueue,
     mcpManager,
     notificationService,
+    schedulerService,
+    remoteSkillFetcher,
+    skillReviewer,
+    workflowRegistry,
+    workflowExecutor,
   };
 
   // Decorate fastify with context
@@ -171,6 +261,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     // Send welcome message
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     socket.send(JSON.stringify({ type: "connected", clientId }));
+  });
+
+  // Start the scheduler
+  schedulerService.start();
+
+  // Stop scheduler on server close
+  server.addHook("onClose", () => {
+    schedulerService.stop();
   });
 
   return server;

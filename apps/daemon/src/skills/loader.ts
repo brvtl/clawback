@@ -79,6 +79,7 @@ export function mergeSkillConfig(
     notifications: config?.notifications ??
       markdown.notifications ?? { onComplete: false, onError: true },
     knowledge: config?.knowledge ?? markdown.knowledge,
+    isRemote: false,
   };
 }
 
