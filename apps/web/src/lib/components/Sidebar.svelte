@@ -114,7 +114,7 @@
           {#if $notifications.unreadCount > 0}
             <button
               class="text-xs text-blue-400 hover:text-blue-300"
-              on:click={() => notifications.markAllRead()}
+              on:click|stopPropagation={() => notifications.markAllRead()}
             >
               Mark all read
             </button>

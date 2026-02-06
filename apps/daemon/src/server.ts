@@ -144,11 +144,21 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         console.log(`[Server] Executing workflow "${workflow.name}" for event ${event.id}`);
         const workflowRun = await workflowExecutor.execute(workflow, event);
 
-        await notificationService.notify({
-          id: `notif_wf_${workflowRun.id}`,
+        // Persist notification to database
+        const notif = await notifRepo.create({
+          runId: workflowRun.id,
+          skillId: workflow.id,
           type: "success",
           title: `Workflow "${workflow.name}" completed`,
           message: `Successfully processed ${event.type} event`,
+        });
+
+        // Send real-time notification
+        await notificationService.notify({
+          id: notif.id,
+          type: "success",
+          title: notif.title,
+          message: notif.message,
           skillId: workflow.id,
           runId: workflowRun.id,
         });
@@ -156,11 +166,21 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         const message = error instanceof Error ? error.message : "Unknown error";
         console.error(`Workflow ${workflow.id} failed for event ${event.id}:`, message);
 
-        await notificationService.notify({
-          id: `notif_wf_err_${event.id}_${workflow.id}`,
+        // Persist error notification to database
+        const notif = await notifRepo.create({
+          runId: event.id, // Use event ID since we don't have a run
+          skillId: workflow.id,
           type: "error",
           title: `Workflow "${workflow.name}" failed`,
           message,
+        });
+
+        // Send real-time notification
+        await notificationService.notify({
+          id: notif.id,
+          type: "error",
+          title: notif.title,
+          message: notif.message,
           skillId: workflow.id,
         });
       }
