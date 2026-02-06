@@ -1,7 +1,9 @@
 <script lang="ts">
   import { page } from "$app/stores";
+  import { goto } from "$app/navigation";
   import { notifications } from "$lib/stores/notifications";
   import { onMount } from "svelte";
+  import type { ApiNotification } from "$lib/api/client";
 
   let showNotifications = false;
 
@@ -28,6 +30,20 @@
     if (minutes < 60) return `${minutes}m ago`;
     if (hours < 24) return `${hours}h ago`;
     return `${days}d ago`;
+  }
+
+  function handleNotificationClick(notif: ApiNotification) {
+    void notifications.markRead(notif.id);
+    showNotifications = false;
+
+    // Navigate based on notification type
+    if (notif.skillId?.startsWith("wf_")) {
+      // Workflow notification - go to workflow page
+      void goto(`/workflows/${notif.skillId}`);
+    } else if (notif.runId) {
+      // Skill run notification - go to runs page with run selected
+      void goto(`/runs?id=${notif.runId}`);
+    }
   }
 
   const navItems = [
@@ -131,7 +147,7 @@
               <button
                 class="w-full p-3 text-left border-b border-gray-700 hover:bg-gray-700 transition-colors
                   {notif.read ? 'opacity-60' : ''}"
-                on:click={() => notifications.markRead(notif.id)}
+                on:click={() => handleNotificationClick(notif)}
               >
                 <div class="flex items-start gap-2">
                   <span class="text-lg">
