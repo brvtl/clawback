@@ -48,7 +48,6 @@ export interface ServerContext {
 
 export interface CreateServerOptions extends FastifyServerOptions {
   db?: DatabaseConnection;
-  skillsDir?: string;
 }
 
 export async function createServer(options: CreateServerOptions = {}): Promise<FastifyInstance> {
@@ -87,10 +86,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   });
 
   // Initialize skill registry with database backing
-  const skillRegistry = new SkillRegistry(options.skillsDir ?? "./skills", skillRepo);
+  const skillRegistry = new SkillRegistry(skillRepo);
 
-  // Load skills from database and sync with file system
-  await skillRegistry.loadSkills();
+  // Load skills from database
+  skillRegistry.loadSkills();
 
   // Initialize scheduler service
   const schedulerService = new SchedulerService({

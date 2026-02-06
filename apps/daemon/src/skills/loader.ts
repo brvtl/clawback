@@ -1,7 +1,5 @@
 import matter from "gray-matter";
-import YAML from "yaml";
 import type {
-  Skill,
   Trigger,
   McpServerConfig,
   ToolPermissions,
@@ -16,16 +14,6 @@ export interface SkillMarkdownResult {
   toolPermissions?: ToolPermissions;
   notifications?: NotificationSettings;
   instructions: string;
-  knowledge?: string[];
-}
-
-export interface SkillConfigResult {
-  name?: string;
-  description?: string;
-  triggers?: Trigger[];
-  mcpServers?: Record<string, McpServerConfig>;
-  toolPermissions?: ToolPermissions;
-  notifications?: NotificationSettings;
   knowledge?: string[];
 }
 
@@ -46,66 +34,4 @@ export function parseSkillMarkdown(content: string): SkillMarkdownResult {
       ? (frontmatter.knowledge as string[])
       : undefined,
   };
-}
-
-export function parseSkillConfig(yamlContent: string): SkillConfigResult {
-  const data = YAML.parse(yamlContent) as Record<string, unknown>;
-
-  return {
-    name: typeof data.name === "string" ? data.name : undefined,
-    description: typeof data.description === "string" ? data.description : undefined,
-    triggers: Array.isArray(data.triggers) ? (data.triggers as Trigger[]) : undefined,
-    mcpServers: data.mcpServers as Record<string, McpServerConfig> | undefined,
-    toolPermissions: data.toolPermissions as ToolPermissions | undefined,
-    notifications: data.notifications as NotificationSettings | undefined,
-    knowledge: Array.isArray(data.knowledge) ? (data.knowledge as string[]) : undefined,
-  };
-}
-
-export function mergeSkillConfig(
-  id: string,
-  markdown: SkillMarkdownResult,
-  config?: SkillConfigResult
-): Skill {
-  return {
-    id,
-    name: config?.name ?? markdown.name ?? id,
-    description: config?.description ?? markdown.description,
-    instructions: markdown.instructions,
-    triggers: config?.triggers ?? markdown.triggers,
-    mcpServers: config?.mcpServers ?? markdown.mcpServers ?? {},
-    toolPermissions: config?.toolPermissions ??
-      markdown.toolPermissions ?? { allow: ["*"], deny: [] },
-    notifications: config?.notifications ??
-      markdown.notifications ?? { onComplete: false, onError: true },
-    knowledge: config?.knowledge ?? markdown.knowledge,
-    isRemote: false,
-  };
-}
-
-import { readFile } from "fs/promises";
-import { dirname, join } from "path";
-import { generateSkillId } from "@clawback/shared";
-
-/**
- * Load a skill from a SKILL.md file
- */
-export async function loadSkillFromFile(filePath: string): Promise<Skill> {
-  const content = await readFile(filePath, "utf-8");
-  const markdownResult = parseSkillMarkdown(content);
-
-  // Try to load optional config.yaml
-  const dir = dirname(filePath);
-  let configResult: SkillConfigResult | undefined;
-
-  try {
-    const configPath = join(dir, "config.yaml");
-    const configContent = await readFile(configPath, "utf-8");
-    configResult = parseSkillConfig(configContent);
-  } catch {
-    // config.yaml is optional
-  }
-
-  const id = generateSkillId();
-  return mergeSkillConfig(id, markdownResult, configResult);
 }

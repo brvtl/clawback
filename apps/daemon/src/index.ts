@@ -16,7 +16,6 @@ config({ path: join(PROJECT_ROOT, ".env.local"), override: true });
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const DB_PATH = process.env.DATABASE_URL ?? join(PROJECT_ROOT, "clawback.db");
-const SKILLS_DIR = process.env.SKILLS_DIR ?? join(PROJECT_ROOT, "skills");
 
 async function main() {
   // Initialize database
@@ -28,7 +27,6 @@ async function main() {
       level: process.env.LOG_LEVEL ?? "info",
     },
     db,
-    skillsDir: resolve(SKILLS_DIR),
   });
 
   // Handle graceful shutdown

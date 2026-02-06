@@ -98,13 +98,6 @@ curl -X POST http://localhost:3000/api/skills \
   }'
 ```
 
-### Via File System
-
-Skills can be defined in the `skills/` directory with:
-
-- `SKILL.md` - Instructions and frontmatter configuration
-- `config.yaml` - Optional configuration overrides
-
 ## MCP Server Management
 
 Configure MCP servers through the web UI at Settings → MCP Servers, or via API:
@@ -149,7 +142,6 @@ Skills reference MCP servers by name:
 | `PORT`              | `3000`          | Server port                           |
 | `HOST`              | `0.0.0.0`       | Server host                           |
 | `DATABASE_URL`      | `./clawback.db` | SQLite database path                  |
-| `SKILLS_DIR`        | `./skills`      | Skills directory                      |
 | `ANTHROPIC_API_KEY` | -               | Required for skill/workflow execution |
 
 ## Project Structure
@@ -162,7 +154,6 @@ clawback/
 ├── packages/
 │   ├── shared/       # Types, schemas, MCP server registry
 │   └── db/           # Drizzle ORM, repositories
-├── skills/           # File-based skill definitions
 ├── Dockerfile
 └── docker-compose.yml
 ```

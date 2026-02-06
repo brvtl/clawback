@@ -1,8 +1,5 @@
 import type { Skill, TriggerFilter } from "@clawback/shared";
 import type { SkillRepository } from "@clawback/db";
-import { loadSkillFromFile } from "./loader.js";
-import { readdir } from "fs/promises";
-import { join } from "path";
 
 export interface SkillMatch {
   skill: Skill;
@@ -18,68 +15,16 @@ export interface EventContext {
 export class SkillRegistry {
   private cache: Map<string, Skill> = new Map();
 
-  constructor(
-    private skillsDir: string,
-    private skillRepo?: SkillRepository
-  ) {}
+  constructor(private skillRepo: SkillRepository) {}
 
   /**
-   * Load all skills from database and sync with file system
+   * Load all skills from database
    */
-  async loadSkills(): Promise<void> {
-    // Clear cache
+  loadSkills(): void {
     this.cache.clear();
-
-    // Load from database if available
-    if (this.skillRepo) {
-      const dbSkills = this.skillRepo.findAll(true);
-      for (const skill of dbSkills) {
-        this.cache.set(skill.id, skill);
-      }
-    }
-
-    // Sync skills from file system
-    await this.syncFromFileSystem();
-  }
-
-  /**
-   * Sync skills from the skills directory to the database
-   */
-  private async syncFromFileSystem(): Promise<void> {
-    try {
-      const entries = await readdir(this.skillsDir, { withFileTypes: true });
-
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-
-        const skillPath = join(this.skillsDir, entry.name, "SKILL.md");
-        try {
-          const skill = await loadSkillFromFile(skillPath);
-
-          if (this.skillRepo) {
-            // Upsert to database
-            const dbSkill = this.skillRepo.upsertFromFile(skillPath, {
-              name: skill.name,
-              description: skill.description,
-              instructions: skill.instructions,
-              triggers: skill.triggers,
-              mcpServers: skill.mcpServers,
-              toolPermissions: skill.toolPermissions,
-              notifications: skill.notifications,
-              knowledge: skill.knowledge,
-            });
-            this.cache.set(dbSkill.id, dbSkill);
-          } else {
-            // No database, just cache in memory
-            this.cache.set(skill.id, skill);
-          }
-        } catch {
-          // Skip directories without valid SKILL.md
-          continue;
-        }
-      }
-    } catch {
-      // Skills directory doesn't exist or isn't readable
+    const dbSkills = this.skillRepo.findAll(true);
+    for (const skill of dbSkills) {
+      this.cache.set(skill.id, skill);
     }
   }
 
@@ -87,30 +32,24 @@ export class SkillRegistry {
    * Register a skill (adds to DB and cache)
    */
   registerSkill(skill: Skill): Skill {
-    if (this.skillRepo) {
-      const created = this.skillRepo.create({
-        name: skill.name,
-        description: skill.description,
-        instructions: skill.instructions,
-        triggers: skill.triggers,
-        mcpServers: skill.mcpServers,
-        toolPermissions: skill.toolPermissions,
-        notifications: skill.notifications,
-        knowledge: skill.knowledge,
-        // Remote skill fields
-        sourceUrl: skill.sourceUrl,
-        isRemote: skill.isRemote,
-        contentHash: skill.contentHash,
-        reviewStatus: skill.reviewStatus,
-        reviewResult: skill.reviewResult,
-      });
-      this.cache.set(created.id, created);
-      return created;
-    }
-
-    // No database, just cache
-    this.cache.set(skill.id, skill);
-    return skill;
+    const created = this.skillRepo.create({
+      name: skill.name,
+      description: skill.description,
+      instructions: skill.instructions,
+      triggers: skill.triggers,
+      mcpServers: skill.mcpServers,
+      toolPermissions: skill.toolPermissions,
+      notifications: skill.notifications,
+      knowledge: skill.knowledge,
+      // Remote skill fields
+      sourceUrl: skill.sourceUrl,
+      isRemote: skill.isRemote,
+      contentHash: skill.contentHash,
+      reviewStatus: skill.reviewStatus,
+      reviewResult: skill.reviewResult,
+    });
+    this.cache.set(created.id, created);
+    return created;
   }
 
   getSkill(id: string): Skill | undefined {
@@ -236,43 +175,25 @@ export class SkillRegistry {
     return false;
   }
 
-  getSkillsDir(): string {
-    return this.skillsDir;
-  }
-
   /**
    * Update a skill
    */
   updateSkill(id: string, updates: Partial<Skill>): Skill | undefined {
-    if (this.skillRepo) {
-      const updated = this.skillRepo.update(id, updates);
-      if (updated) {
-        this.cache.set(id, updated);
-      }
-      return updated;
-    }
-
-    const existing = this.cache.get(id);
-    if (existing) {
-      const updated = { ...existing, ...updates };
+    const updated = this.skillRepo.update(id, updates);
+    if (updated) {
       this.cache.set(id, updated);
-      return updated;
     }
-    return undefined;
+    return updated;
   }
 
   /**
    * Delete a skill
    */
   deleteSkill(id: string): boolean {
-    if (this.skillRepo) {
-      const deleted = this.skillRepo.delete(id);
-      if (deleted) {
-        this.cache.delete(id);
-      }
-      return deleted;
+    const deleted = this.skillRepo.delete(id);
+    if (deleted) {
+      this.cache.delete(id);
     }
-
-    return this.cache.delete(id);
+    return deleted;
   }
 }
