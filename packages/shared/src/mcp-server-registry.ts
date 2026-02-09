@@ -69,6 +69,25 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
     args: ["-y", "@modelcontextprotocol/server-sqlite"],
     requiredEnv: ["SQLITE_DB_PATH"],
   },
+  {
+    package: "@dkvdm/onepassword-mcp-server",
+    displayName: "1Password",
+    command: "npx",
+    args: ["-y", "@smithery/cli", "run", "@dkvdm/onepassword-mcp-server"],
+    requiredEnv: ["OP_SERVICE_ACCOUNT_TOKEN"],
+    envAliases: {
+      ONEPASSWORD_TOKEN: "OP_SERVICE_ACCOUNT_TOKEN",
+      OP_TOKEN: "OP_SERVICE_ACCOUNT_TOKEN",
+      "1PASSWORD_TOKEN": "OP_SERVICE_ACCOUNT_TOKEN",
+    },
+  },
+  {
+    package: "@playwright/mcp",
+    displayName: "Playwright Browser",
+    command: "npx",
+    args: ["-y", "@playwright/mcp@latest", "--headless"],
+    requiredEnv: [],
+  },
 ];
 
 /**

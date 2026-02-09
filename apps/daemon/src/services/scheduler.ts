@@ -1,11 +1,11 @@
 import cronParser from "cron-parser";
-import type { ScheduledJobRepository, SkillRepository, EventRepository } from "@clawback/db";
+import type { ScheduledJobRepository, SkillRepository } from "@clawback/db";
 import type { Skill, ScheduledJob } from "@clawback/shared";
+import type { EventQueue } from "./queue.js";
 
 export interface SchedulerDependencies {
   scheduledJobRepo: ScheduledJobRepository;
   skillRepo: SkillRepository;
-  eventRepo: EventRepository;
 }
 
 export interface SchedulerOptions {
@@ -15,7 +15,7 @@ export interface SchedulerOptions {
 export class SchedulerService {
   private scheduledJobRepo: ScheduledJobRepository;
   private skillRepo: SkillRepository;
-  private eventRepo: EventRepository;
+  private eventQueue: EventQueue | null = null;
   private tickIntervalMs: number;
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -23,8 +23,11 @@ export class SchedulerService {
   constructor(deps: SchedulerDependencies, options: SchedulerOptions = {}) {
     this.scheduledJobRepo = deps.scheduledJobRepo;
     this.skillRepo = deps.skillRepo;
-    this.eventRepo = deps.eventRepo;
     this.tickIntervalMs = options.tickIntervalMs ?? 60000;
+  }
+
+  setEventQueue(queue: EventQueue): void {
+    this.eventQueue = queue;
   }
 
   start(): void {
@@ -77,11 +80,16 @@ export class SchedulerService {
       return;
     }
 
+    if (!this.eventQueue) {
+      console.warn(`[Scheduler] Event queue not set, cannot fire job ${job.id}`);
+      return;
+    }
+
     console.log(`[Scheduler] Firing job ${job.id} for skill "${skill.name}"`);
 
-    // Create cron event
+    // Enqueue cron event for processing
     const timestamp = new Date().toISOString();
-    await this.eventRepo.create({
+    await this.eventQueue.enqueue({
       source: "cron",
       type: "scheduled",
       payload: {

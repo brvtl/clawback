@@ -69,6 +69,7 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       toolPermissions?: { allow?: string[]; deny?: string[] };
       notifications?: { onComplete?: boolean; onError?: boolean };
       knowledge?: string[];
+      model?: "opus" | "sonnet" | "haiku";
     };
 
     const skill = context.skillRegistry.registerSkill({
@@ -81,6 +82,7 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       toolPermissions: body.toolPermissions ?? { allow: ["*"], deny: [] },
       notifications: body.notifications ?? { onComplete: false, onError: true },
       knowledge: body.knowledge,
+      model: body.model ?? "sonnet",
     });
 
     // Sync scheduled jobs if skill has cron triggers
@@ -256,6 +258,7 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         toolPermissions?: { allow?: string[]; deny?: string[] };
         notifications?: { onComplete?: boolean; onError?: boolean };
         knowledge?: string[];
+        model?: "opus" | "sonnet" | "haiku";
       };
 
       const skill = context.skillRegistry.updateSkill(request.params.id, {
@@ -267,10 +270,17 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         toolPermissions: body.toolPermissions,
         notifications: body.notifications,
         knowledge: body.knowledge,
+        model: body.model,
       });
 
       if (!skill) {
         return reply.status(404).send({ error: "Skill not found" });
+      }
+
+      // Sync scheduled jobs if skill has cron triggers
+      const hasCronTrigger = skill.triggers.some((t) => t.source === "cron" && t.schedule);
+      if (hasCronTrigger) {
+        context.schedulerService.syncJobsFromSkills();
       }
 
       return reply.send({ skill });

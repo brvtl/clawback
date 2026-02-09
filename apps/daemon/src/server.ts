@@ -90,7 +90,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const schedulerService = new SchedulerService({
     scheduledJobRepo,
     skillRepo,
-    eventRepo,
   });
 
   // Sync scheduled jobs from skills with cron triggers
@@ -123,6 +122,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Initialize event queue
   const eventQueue = new EventQueue(eventRepo, skillRegistry);
+
+  // Wire scheduler to event queue so cron events get processed
+  schedulerService.setEventQueue(eventQueue);
 
   // Wire up event processing: queue -> skill/workflow executor -> notifications
   eventQueue.onEvent(async (event) => {

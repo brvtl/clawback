@@ -94,6 +94,7 @@ A skill defines WHAT to do when an event occurs:
 - **instructions**: WHAT Claude should do (detailed prompt)
 - **mcpServers**: WHICH tools Claude can use
 - **notifications**: WHO to alert on completion/error
+- **model**: WHICH AI model to use: 'haiku' (fast, cheap), 'sonnet' (balanced, default), 'opus' (most capable)
 
 ### Workflows
 A workflow orchestrates multiple skills with AI coordination:
@@ -158,9 +159,40 @@ Clawback receives events via webhook endpoints:
 - **Credentials**: API keys as needed (API_KEY, AUTH_TOKEN, etc.)
 - **Use cases**: Call any REST API, integrate with any service
 
+### Browser Automation (Playwright)
+- **MCP Server**: \`npx -y @playwright/mcp@latest --headless\`
+- **Credentials**: None (runs headless browser locally)
+- **Use cases**: Web scraping, form filling, UI testing, automating websites that don't have APIs
+- **Capabilities**: Navigate pages, click elements, fill forms, take screenshots, extract data
+
+### 1Password (Credential Management)
+- **MCP Server**: \`npx -y @smithery/cli run @dkvdm/onepassword-mcp-server\`
+- **Credentials**: OP_SERVICE_ACCOUNT_TOKEN (1Password service account token)
+  - Create at: https://my.1password.com → Developer → Service Accounts
+  - Grant access only to vaults the automation needs
+- **Use cases**: Secure credential retrieval for automations, avoid storing passwords in Clawback
+- **Security**: Credentials never stored in Clawback DB, only accessed at runtime
+
+### Browser + 1Password (Authenticated Website Automation)
+Combine Playwright and 1Password for powerful authenticated automations:
+
+1. **Setup**: Add both MCP servers to your skill
+2. **Credential retrieval**: Use 1Password tools to get login credentials
+3. **Browser automation**: Use Playwright to navigate and interact with the site
+4. **Example skill**: "Retrieve JIRA credentials from 1Password, log into JIRA, check for overdue issues, return summary"
+
+**Example instructions for authenticated automation:**
+\`\`\`
+1. Use 1Password to retrieve the "jira-work" item from the "AI Automation" vault
+2. Open a browser and navigate to the website URL from the credential
+3. Log in using the retrieved username and password
+4. Perform the requested action
+5. Return results (never log or output the actual credentials)
+\`\`\`
+
 ### Scheduled Tasks
 - **No MCP server needed** - uses cron triggers
-- **Trigger format**: \`{ "source": "schedule", "schedule": "0 9 * * *" }\`
+- **Trigger format**: \`{ "source": "cron", "schedule": "0 9 * * *" }\`
 - **Use cases**: Daily reports, periodic cleanup, regular syncs
 
 ### Custom/Generic Webhooks
