@@ -60,6 +60,8 @@ export const skills = sqliteTable("skills", {
   lastFetchedAt: integer("last_fetched_at", { mode: "number" }),
   reviewStatus: text("review_status", { enum: ["pending", "approved", "rejected"] }),
   reviewResult: text("review_result"), // JSON with review details
+  // Model selection
+  model: text("model", { enum: ["opus", "sonnet", "haiku"] }).default("sonnet"),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
@@ -77,13 +79,12 @@ export const mcpServers = sqliteTable("mcp_servers", {
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
 
-// Scheduled Jobs table - tracks cron-triggered skill executions
+// Scheduled Jobs table - tracks cron-triggered skill/workflow executions
 export const scheduledJobs = sqliteTable("scheduled_jobs", {
   id: text("id").primaryKey(),
-  skillId: text("skill_id")
-    .notNull()
-    .references(() => skills.id),
-  triggerIndex: integer("trigger_index").notNull(), // Index of the trigger in skill.triggers array
+  skillId: text("skill_id").references(() => skills.id), // nullable - either skillId or workflowId
+  workflowId: text("workflow_id").references(() => workflows.id), // nullable - either skillId or workflowId
+  triggerIndex: integer("trigger_index").notNull(), // Index of the trigger in skill/workflow.triggers array
   schedule: text("schedule").notNull(), // Cron expression
   lastRunAt: integer("last_run_at", { mode: "number" }),
   nextRunAt: integer("next_run_at", { mode: "number" }).notNull(),

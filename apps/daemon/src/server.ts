@@ -90,10 +90,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const schedulerService = new SchedulerService({
     scheduledJobRepo,
     skillRepo,
+    workflowRepo,
   });
 
-  // Sync scheduled jobs from skills with cron triggers
+  // Sync scheduled jobs from skills and workflows with cron triggers
   schedulerService.syncJobsFromSkills();
+  schedulerService.syncJobsFromWorkflows();
 
   // Initialize skill executor with remote skill support
   const skillExecutor = new SkillExecutor({
@@ -133,6 +135,60 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       typeof event.payload === "string"
         ? (JSON.parse(event.payload) as Record<string, unknown>)
         : event.payload;
+
+    // Special handling for cron-triggered workflows (direct invocation via workflowId in payload)
+    if (event.source === "cron" && payload.workflowId) {
+      const workflow = workflowRegistry.getWorkflow(payload.workflowId as string);
+      if (workflow) {
+        try {
+          console.log(
+            `[Server] Executing cron-triggered workflow "${workflow.name}" for event ${event.id}`
+          );
+          const workflowRun = await workflowExecutor.execute(workflow, event);
+
+          // Persist notification to database
+          const notif = await notifRepo.create({
+            runId: workflowRun.id,
+            skillId: workflow.id,
+            type: "success",
+            title: `Workflow "${workflow.name}" completed`,
+            message: `Successfully processed scheduled event`,
+          });
+
+          // Send real-time notification
+          await notificationService.notify({
+            id: notif.id,
+            type: "success",
+            title: notif.title,
+            message: notif.message,
+            skillId: workflow.id,
+            runId: workflowRun.id,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown error";
+          console.error(`Cron workflow ${workflow.id} failed for event ${event.id}:`, message);
+
+          // Persist error notification to database
+          const notif = await notifRepo.create({
+            runId: event.id,
+            skillId: workflow.id,
+            type: "error",
+            title: `Workflow "${workflow.name}" failed`,
+            message,
+          });
+
+          // Send real-time notification
+          await notificationService.notify({
+            id: notif.id,
+            type: "error",
+            title: notif.title,
+            message: notif.message,
+            skillId: workflow.id,
+          });
+        }
+      }
+      return; // Don't do normal matching for direct cron workflow invocations
+    }
 
     // Find matching workflows for this event
     const workflowMatches = workflowRegistry.findMatchingWorkflows(

@@ -53,6 +53,7 @@
     { href: "/workflows", label: "Workflows", icon: "workflow" },
     { href: "/events", label: "Events", icon: "inbox" },
     { href: "/runs", label: "Runs", icon: "play" },
+    { href: "/schedules", label: "Schedules", icon: "clock" },
     { href: "/settings", label: "Settings", icon: "settings" },
   ];
 
@@ -94,7 +95,9 @@
                         ? "📥"
                         : item.icon === "play"
                           ? "▶️"
-                          : "⚙️"}</span
+                          : item.icon === "clock"
+                            ? "🕐"
+                            : "⚙️"}</span
             >
             <span>{item.label}</span>
           </a>

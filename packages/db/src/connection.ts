@@ -89,13 +89,15 @@ export function createTestConnection(): DatabaseConnection {
       last_fetched_at INTEGER,
       review_status TEXT,
       review_result TEXT,
+      model TEXT DEFAULT 'sonnet',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
       id TEXT PRIMARY KEY,
-      skill_id TEXT NOT NULL,
+      skill_id TEXT,
+      workflow_id TEXT,
       trigger_index INTEGER NOT NULL,
       schedule TEXT NOT NULL,
       last_run_at INTEGER,
@@ -103,7 +105,8 @@ export function createTestConnection(): DatabaseConnection {
       enabled INTEGER DEFAULT 1,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
-      FOREIGN KEY (skill_id) REFERENCES skills(id)
+      FOREIGN KEY (skill_id) REFERENCES skills(id),
+      FOREIGN KEY (workflow_id) REFERENCES workflows(id)
     );
 
     CREATE TABLE IF NOT EXISTS notifications (

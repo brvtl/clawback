@@ -22,6 +22,20 @@
       "when": 1770350798116,
       "tag": "0002_icy_roxanne_simpson",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1770415350395,
+      "tag": "0003_married_xavin",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1770500000000,
+      "tag": "0004_workflow_cron_support",
+      "breakpoints": true
     }
   ]
 }

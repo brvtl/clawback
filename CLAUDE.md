@@ -22,6 +22,16 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 - Contain: name, description, instructions (prompt), triggers, MCP servers, tool permissions
 - Created via web UI (AI builder) or API
 - Executed using Anthropic API with MCP tool integration
+- Can include knowledge files for additional context
+- Tool permissions use glob patterns (e.g., `["mcp__github__*"]` to allow all GitHub tools)
+
+### Remote Skills
+
+- Skills can be imported from URLs (e.g., GitHub raw files)
+- AI security review analyzes imported skills for risks
+- Review checks: data exfiltration, malicious code, privilege escalation
+- Remote skills run with restricted tool permissions by default
+- Content hash tracks changes for re-review
 
 ### Workflows
 
@@ -35,6 +45,13 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 - Incoming webhooks from sources (github, slack, custom)
 - Cron-scheduled events (source: "cron", type: "scheduled")
 - Stored in SQLite, routed to matching skills/workflows
+
+### Scheduled Jobs
+
+- Both skills and workflows can have cron triggers
+- Managed via `/schedules` page in web UI
+- Jobs can be enabled/disabled without deletion
+- Scheduler syncs jobs from skills/workflows at startup
 
 ### Runs
 
@@ -52,6 +69,43 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 - External tool providers (GitHub, filesystem, etc.)
 - Configured globally, referenced by skills/workflows by name
 - Env vars auto-fixed for known servers (e.g., GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN)
+- Env vars support `${VAR}` placeholder syntax for secrets
+
+### Clawback MCP Server
+
+- `packages/mcp-server/` exposes Clawback API as MCP tools
+- Used by the AI Builder to create/update skills, workflows, MCP servers
+- Tools: list_skills, get_skill, list_runs, list_events, create_skill, etc.
+- Connect via: `CLAWBACK_API_URL` env var (default: http://localhost:3000)
+
+### AI Builder
+
+- Chat interface at `/builder` for creating automations
+- Uses Claude Agent SDK with Clawback MCP server
+- Can create skills, workflows, and MCP servers via conversation
+- Returns structured actions that the frontend applies
+
+### Notifications
+
+- Real-time notifications via WebSocket
+- Desktop notifications via node-notifier
+- Configurable per-skill: `onComplete`, `onError` flags
+- Stored in database, viewable in web UI header
+
+## Web UI Pages
+
+- `/` - Dashboard with recent activity
+- `/builder` - AI chat for creating automations
+- `/skills` - List and manage skills
+- `/skills/[id]` - Skill detail and runs
+- `/workflows` - List and manage workflows
+- `/workflows/[id]` - Workflow detail and runs
+- `/events` - List incoming events
+- `/events/[id]` - Event detail
+- `/runs` - List skill execution runs
+- `/runs/[id]` - Run detail with tool calls
+- `/schedules` - View and manage cron jobs
+- `/settings` - MCP server configuration
 
 ## Development Commands
 
@@ -109,7 +163,13 @@ Skills/workflows reference MCP servers by name (e.g., `["github"]`). The executo
 - `apps/daemon/src/services/scheduler.ts` - Cron scheduling service
 - `apps/daemon/src/routes/api.ts` - REST API endpoints
 - `apps/daemon/src/routes/webhook.ts` - Webhook ingestion
+- `apps/daemon/src/routes/builder.ts` - AI builder chat endpoint
+- `apps/daemon/src/services/remote-skill-fetcher.ts` - Fetch skills from URLs
+- `apps/daemon/src/services/skill-reviewer.ts` - AI security review for remote skills
+- `apps/daemon/src/services/notifications.ts` - Desktop + WebSocket notifications
+- `apps/daemon/src/mcp/manager.ts` - MCP server process management
 - `packages/shared/src/mcp-server-registry.ts` - Known MCP servers with env var validation
+- `packages/mcp-server/src/index.ts` - Clawback MCP server implementation
 - `packages/db/src/schema.ts` - Database schema
 
 ## Common Tasks

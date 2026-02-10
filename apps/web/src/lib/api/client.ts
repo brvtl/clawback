@@ -34,6 +34,8 @@ export interface ApiRun {
   updatedAt: number;
 }
 
+export type SkillModel = "opus" | "sonnet" | "haiku";
+
 export interface ApiSkill {
   id: string;
   name: string;
@@ -51,6 +53,7 @@ export interface ApiSkill {
   toolPermissions?: { allow?: string[]; deny?: string[] };
   notifications?: { onComplete?: boolean; onError?: boolean };
   knowledge?: string[];
+  model?: SkillModel;
 }
 
 export interface ApiNotification {
@@ -107,6 +110,23 @@ export interface ApiWorkflowRun {
   completedAt?: number;
   createdAt?: number;
   updatedAt?: number;
+}
+
+export interface ApiScheduledJob {
+  id: string;
+  skillId: string | null;
+  workflowId: string | null;
+  triggerIndex: number;
+  schedule: string;
+  lastRunAt: number | null;
+  nextRunAt: number;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  skillName?: string;
+  workflowName?: string;
+  nextRunFormatted?: string;
+  lastRunFormatted?: string | null;
 }
 
 class ApiClient {
@@ -360,6 +380,18 @@ class ApiClient {
         body: JSON.stringify({ payload }),
       }
     );
+  }
+
+  // Scheduled Jobs methods
+  async getScheduledJobs(): Promise<{ jobs: ApiScheduledJob[] }> {
+    return this.fetch<{ jobs: ApiScheduledJob[] }>("/api/scheduled-jobs");
+  }
+
+  async toggleScheduledJob(id: string, enabled: boolean): Promise<{ job: ApiScheduledJob }> {
+    return this.fetch<{ job: ApiScheduledJob }>(`/api/scheduled-jobs/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
   }
 }
 

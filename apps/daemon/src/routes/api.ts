@@ -517,14 +517,12 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
 
   // List scheduled jobs
   server.get("/api/scheduled-jobs", async (_request: FastifyRequest, reply: FastifyReply) => {
-    const jobs = context.scheduledJobRepo.findAll();
+    const jobs = context.scheduledJobRepo.findAllEnriched();
 
-    // Enrich jobs with skill info
+    // Add formatted timestamps
     const enrichedJobs = jobs.map((job) => {
-      const skill = context.skillRegistry.getSkill(job.skillId);
       return {
         ...job,
-        skillName: skill?.name ?? "Unknown",
         nextRunFormatted: new Date(job.nextRunAt).toISOString(),
         lastRunFormatted: job.lastRunAt ? new Date(job.lastRunAt).toISOString() : null,
       };
@@ -542,13 +540,25 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         return reply.status(404).send({ error: "Scheduled job not found" });
       }
 
-      const skill = context.skillRegistry.getSkill(job.skillId);
+      // Get skill or workflow name
+      let skillName: string | undefined;
+      let workflowName: string | undefined;
+      if (job.skillId) {
+        const skill = context.skillRegistry.getSkill(job.skillId);
+        skillName = skill?.name;
+      }
+      if (job.workflowId) {
+        const workflow = context.workflowRegistry.getWorkflow(job.workflowId);
+        workflowName = workflow?.name;
+      }
+
       const nextRuns = context.schedulerService.getNextRuns(job.schedule, 5);
 
       return reply.send({
         job: {
           ...job,
-          skillName: skill?.name ?? "Unknown",
+          skillName,
+          workflowName,
           nextRunFormatted: new Date(job.nextRunAt).toISOString(),
           lastRunFormatted: job.lastRunAt ? new Date(job.lastRunAt).toISOString() : null,
         },
@@ -669,6 +679,12 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       enabled: true,
     });
 
+    // Sync scheduled jobs if workflow has cron triggers
+    const hasCronTrigger = workflow.triggers.some((t) => t.source === "cron" && t.schedule);
+    if (hasCronTrigger) {
+      context.schedulerService.syncJobsFromWorkflows();
+    }
+
     return reply.status(201).send({ workflow });
   });
 
@@ -709,6 +725,12 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       const workflow = context.workflowRegistry.updateWorkflow(request.params.id, body);
       if (!workflow) {
         return reply.status(404).send({ error: "Workflow not found" });
+      }
+
+      // Sync scheduled jobs if workflow has cron triggers
+      const hasCronTrigger = workflow.triggers.some((t) => t.source === "cron" && t.schedule);
+      if (hasCronTrigger) {
+        context.schedulerService.syncJobsFromWorkflows();
       }
 
       return reply.send({ workflow });
