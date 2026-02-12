@@ -153,6 +153,12 @@ const TOOLS = [
           description: "Array of MCP server names this skill can use",
           items: { type: "string" },
         },
+        model: {
+          type: "string",
+          description:
+            "AI model for skill execution: 'haiku' (fast, cheap), 'sonnet' (balanced, default), or 'opus' (most capable)",
+          enum: ["haiku", "sonnet", "opus"],
+        },
       },
       required: ["name", "instructions", "triggers"],
     },

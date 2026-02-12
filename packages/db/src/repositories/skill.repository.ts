@@ -9,6 +9,7 @@ import type {
   NotificationSettings,
   ReviewStatus,
   ReviewResult,
+  SkillModel,
 } from "@clawback/shared";
 import { generateSkillId } from "@clawback/shared";
 
@@ -32,6 +33,8 @@ export interface CreateSkillInput {
   contentHash?: string;
   reviewStatus?: ReviewStatus;
   reviewResult?: ReviewResult;
+  // Model selection
+  model?: SkillModel;
 }
 
 export interface UpdateSkillInput {
@@ -48,6 +51,8 @@ export interface UpdateSkillInput {
   contentHash?: string | undefined;
   reviewStatus?: ReviewStatus | undefined;
   reviewResult?: ReviewResult | undefined;
+  // Model selection
+  model?: SkillModel | undefined;
 }
 
 export class SkillRepository {
@@ -76,6 +81,8 @@ export class SkillRepository {
       reviewResult: dbSkill.reviewResult
         ? (JSON.parse(dbSkill.reviewResult) as ReviewResult)
         : undefined,
+      // Model selection
+      model: (dbSkill.model as SkillModel) ?? "sonnet",
     };
   }
 
@@ -102,6 +109,8 @@ export class SkillRepository {
       contentHash: input.contentHash,
       reviewStatus: input.reviewStatus,
       reviewResult: input.reviewResult ? JSON.stringify(input.reviewResult) : null,
+      // Model selection
+      model: input.model ?? "sonnet",
       createdAt: now,
       updatedAt: now,
     };
@@ -155,6 +164,8 @@ export class SkillRepository {
     if (input.contentHash !== undefined) updates.contentHash = input.contentHash;
     if (input.reviewStatus !== undefined) updates.reviewStatus = input.reviewStatus;
     if (input.reviewResult !== undefined) updates.reviewResult = JSON.stringify(input.reviewResult);
+    // Model selection
+    if (input.model !== undefined) updates.model = input.model;
 
     this.db.update(skills).set(updates).where(eq(skills.id, id)).run();
 

@@ -60,6 +60,10 @@ export const ReviewResultSchema = z.object({
 });
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;
 
+// Model selection for skill execution
+export const SkillModelSchema = z.enum(["opus", "sonnet", "haiku"]);
+export type SkillModel = z.infer<typeof SkillModelSchema>;
+
 export const SkillSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -77,6 +81,8 @@ export const SkillSchema = z.object({
   lastFetchedAt: z.number().optional(),
   reviewStatus: ReviewStatusSchema.optional(),
   reviewResult: ReviewResultSchema.optional(),
+  // Model selection
+  model: SkillModelSchema.default("sonnet"),
 });
 
 export type Skill = z.infer<typeof SkillSchema>;

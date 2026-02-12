@@ -3,6 +3,7 @@ import {
   type Skill,
   type Event,
   type ToolPermissions as SharedToolPermissions,
+  type SkillModel,
 } from "@clawback/shared";
 import type {
   RunRepository,
@@ -19,6 +20,13 @@ import type { SkillReviewer } from "../services/skill-reviewer.js";
 const REMOTE_SKILL_PERMISSIONS: SharedToolPermissions = {
   allow: ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
   deny: ["Write", "Edit", "Bash", "mcp__*"],
+};
+
+// Map skill model enum to Claude model IDs
+const MODEL_IDS: Record<SkillModel, string> = {
+  opus: "claude-opus-4-20250514",
+  sonnet: "claude-sonnet-4-20250514",
+  haiku: "claude-haiku-4-20250514",
 };
 
 export interface ExecutorDependencies {
@@ -265,8 +273,9 @@ Process this ${event.type} event from ${event.source}:
 ${JSON.stringify(eventPayload, null, 2)}
 \`\`\``;
 
+    const modelId = MODEL_IDS[skill.model ?? "sonnet"];
     console.log(
-      `[SkillExecutor] Running skill "${skill.name}" with ${Object.keys(mcpServers).length} MCP servers`
+      `[SkillExecutor] Running skill "${skill.name}" with model ${skill.model ?? "sonnet"} (${modelId}) and ${Object.keys(mcpServers).length} MCP servers`
     );
 
     let finalResponse = "";
@@ -276,7 +285,7 @@ ${JSON.stringify(eventPayload, null, 2)}
       const q = query({
         prompt: fullPrompt,
         options: {
-          model: "claude-sonnet-4-20250514",
+          model: modelId,
           maxTurns: 20,
           // Allow all MCP tools without prompting for permissions
           permissionMode: "bypassPermissions",

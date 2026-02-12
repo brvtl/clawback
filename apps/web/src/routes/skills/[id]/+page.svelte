@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { api, type ApiSkill } from "$lib/api/client";
+  import { api, type ApiSkill, type SkillModel } from "$lib/api/client";
 
   let skill: ApiSkill | null = null;
   let loading = true;
@@ -20,6 +20,7 @@
   let editToolPermissions = "";
   let editNotifications = "";
   let editKnowledge = "";
+  let editModel: SkillModel = "sonnet";
 
   onMount(async () => {
     try {
@@ -51,6 +52,7 @@
       2
     );
     editKnowledge = (skill.knowledge ?? []).join("\n");
+    editModel = skill.model ?? "sonnet";
   }
 
   function openEditModal() {
@@ -117,6 +119,7 @@
         knowledge: editKnowledge.trim()
           ? editKnowledge.split("\n").filter((k) => k.trim())
           : undefined,
+        model: editModel,
       });
 
       skill = response.skill;
@@ -185,8 +188,14 @@
 
     <h1 class="text-3xl font-bold mb-2">{skill.name}</h1>
     {#if skill.description}
-      <p class="text-gray-400 mb-8">{skill.description}</p>
+      <p class="text-gray-400 mb-4">{skill.description}</p>
     {/if}
+    <div class="flex items-center gap-2 mb-8">
+      <span class="text-sm text-gray-400">Model:</span>
+      <span class="bg-purple-500/20 text-purple-400 text-sm px-2 py-1 rounded capitalize"
+        >{skill.model ?? "sonnet"}</span
+      >
+    </div>
 
     <div class="grid gap-6">
       <!-- Triggers -->
@@ -367,7 +376,7 @@
       {/if}
 
       <form on:submit|preventDefault={saveSkill} class="space-y-4">
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-3 gap-4">
           <div>
             <label for="name" class="block text-sm font-medium text-gray-400 mb-1">Name</label>
             <input
@@ -389,6 +398,19 @@
               bind:value={editDescription}
               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
             />
+          </div>
+
+          <div>
+            <label for="model" class="block text-sm font-medium text-gray-400 mb-1">Model</label>
+            <select
+              id="model"
+              bind:value={editModel}
+              class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+            >
+              <option value="haiku">Haiku (Fast, cheap)</option>
+              <option value="sonnet">Sonnet (Balanced)</option>
+              <option value="opus">Opus (Most capable)</option>
+            </select>
           </div>
         </div>
 

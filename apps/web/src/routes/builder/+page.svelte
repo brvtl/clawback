@@ -145,7 +145,7 @@ What would you like to build today?`,
       lines.push("No skills configured yet.");
     } else {
       for (const skill of skills) {
-        lines.push(`- **${skill.name}** (${skill.id})`);
+        lines.push(`- **${skill.name}** (${skill.id}) [model: ${skill.model ?? "sonnet"}]`);
         lines.push(
           `  Triggers: ${skill.triggers.map((t) => `${t.source}:${t.events?.join(",") ?? "*"}`).join(", ")}`
         );
