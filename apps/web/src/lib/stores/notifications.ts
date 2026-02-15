@@ -73,10 +73,24 @@ function createNotificationStore() {
       }));
     },
 
+    getWsUrl(): string {
+      if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL as string;
+
+      const apiBase =
+        (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:3000";
+      if (apiBase) {
+        return apiBase.replace(/^http/, "ws") + "/ws";
+      }
+
+      // Empty API base (Docker) — derive from current page
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${protocol}//${window.location.host}/ws`;
+    },
+
     connectWebSocket() {
       if (!browser) return;
 
-      const wsUrl = import.meta.env.VITE_WS_URL ?? "ws://localhost:3000";
+      const wsUrl = this.getWsUrl();
 
       try {
         wsConnection = new WebSocket(wsUrl);

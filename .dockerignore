@@ -6,6 +6,7 @@ node_modules
 dist
 **/dist
 .svelte-kit
+apps/web/build
 
 # Development files
 *.test.ts
@@ -33,9 +34,6 @@ vitest.config.ts
 !.env.example
 coverage
 .nyc_output
-
-# Web app (not needed for daemon image)
-apps/web
 
 # Documentation
 *.md

@@ -24,6 +24,7 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 - Executed using Anthropic API with MCP tool integration
 - Can include knowledge files for additional context
 - Tool permissions use glob patterns (e.g., `["mcp__github__*"]` to allow all GitHub tools)
+- Model selection per-skill: `haiku` (fast/cheap), `sonnet` (balanced, default), `opus` (most capable)
 
 ### Remote Skills
 
