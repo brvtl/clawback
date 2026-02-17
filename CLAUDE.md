@@ -37,9 +37,10 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 ### Workflows
 
 - AI-orchestrated multi-skill automations
-- Use Claude (Opus/Sonnet) as orchestrator with custom tools: `spawn_skill`, `complete_workflow`, `fail_workflow`
+- Use Claude (Opus/Sonnet) as orchestrator with custom tools: `spawn_skill`, `complete_workflow`, `fail_workflow`, `request_human_input`
 - Can run skills in parallel or sequence based on orchestrator instructions
 - Triggered by events same as skills
+- Can pause for human input via `request_human_input` tool (status: `waiting_for_input`)
 
 ### Events
 
@@ -64,6 +65,23 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 - Execution record of a workflow
 - Contains array of skill run IDs spawned by orchestrator
 - Output includes summary, results, and individual skill outputs
+- Status can be `waiting_for_input` when paused for HITL
+
+### Checkpoints
+
+- Full state snapshots saved at every execution step (LangGraph-inspired)
+- Stored in `checkpoints` table with type, data, and optional full conversation state
+- Types: `assistant_message`, `tool_call`, `tool_result`, `skill_spawn`, `skill_complete`, `hitl_request`, `hitl_response`, `error`
+- Broadcast over WebSocket for live UI updates
+- Any checkpoint with state is a valid resume point
+
+### Human-in-the-Loop (HITL)
+
+- Workflows can call `request_human_input` tool to pause and ask for human guidance
+- Creates a checkpoint with full conversation state, then exits the orchestrator loop
+- Human responds via `/hitl` page or API → workflow resumes from checkpoint
+- HITL requests stored in `hitl_requests` table with prompt, context, options, timeout
+- Daemon restart safe: state lives in DB, pending requests survive restarts
 
 ### MCP Servers
 
@@ -71,6 +89,7 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 - Configured globally, referenced by skills/workflows by name
 - Env vars auto-fixed for known servers (e.g., GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN)
 - Env vars support `${VAR}` placeholder syntax for secrets
+- Known servers can have `setupCommands` (e.g., Playwright auto-installs browsers)
 
 ### Clawback MCP Server
 
@@ -104,7 +123,8 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 - `/events` - List incoming events
 - `/events/[id]` - Event detail
 - `/runs` - List skill execution runs
-- `/runs/[id]` - Run detail with tool calls
+- `/runs/[id]` - Run detail with tool calls and checkpoint timeline
+- `/hitl` - Human input requests with conversation context
 - `/schedules` - View and manage cron jobs
 - `/settings` - MCP server configuration
 
@@ -130,6 +150,8 @@ Database access goes through repositories in `packages/db/src/repositories/`:
 - `WorkflowRepository` - workflow CRUD + workflow runs
 - `ScheduledJobRepository` - cron job management
 - `McpServerRepository` - MCP server CRUD with encrypted env vars
+- `CheckpointRepository` - checkpoint CRUD (state snapshots)
+- `HitlRequestRepository` - human-in-the-loop request CRUD
 
 ### Skill Execution Flow
 
@@ -143,9 +165,12 @@ Database access goes through repositories in `packages/db/src/repositories/`:
 
 1. Event triggers workflow → `apps/daemon/src/workflows/registry.ts`
 2. Workflow executor starts → `apps/daemon/src/services/workflow-executor.ts`
-3. Claude orchestrates with tools: spawn_skill, complete_workflow, fail_workflow
+3. Claude orchestrates with tools: spawn_skill, complete_workflow, fail_workflow, request_human_input
 4. Skills spawned create synthetic events and execute
-5. Workflow run recorded with all skill results
+5. Checkpoints saved at every step (broadcast via WebSocket)
+6. If `request_human_input` called: saves checkpoint with full state, creates HITL request, exits loop
+7. Human responds → workflow resumes from checkpoint with restored messages
+8. Workflow run recorded with all skill results
 
 ### MCP Server Resolution
 
@@ -160,7 +185,7 @@ Skills/workflows reference MCP servers by name (e.g., `["github"]`). The executo
 ## Important Files
 
 - `apps/daemon/src/skills/executor.ts` - Core skill execution with Anthropic API
-- `apps/daemon/src/services/workflow-executor.ts` - Workflow orchestration
+- `apps/daemon/src/services/workflow-executor.ts` - Workflow orchestration + HITL + checkpoints
 - `apps/daemon/src/services/scheduler.ts` - Cron scheduling service
 - `apps/daemon/src/routes/api.ts` - REST API endpoints
 - `apps/daemon/src/routes/webhook.ts` - Webhook ingestion
