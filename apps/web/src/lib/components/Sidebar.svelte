@@ -2,6 +2,7 @@
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { notifications } from "$lib/stores/notifications";
+  import { hitlStore, pendingHitlCount } from "$lib/stores/hitl";
   import { onMount } from "svelte";
   import type { ApiNotification } from "$lib/api/client";
 
@@ -9,6 +10,7 @@
 
   onMount(() => {
     notifications.load();
+    hitlStore.load();
   });
 
   function toggleNotifications() {
@@ -53,6 +55,7 @@
     { href: "/workflows", label: "Workflows", icon: "workflow" },
     { href: "/events", label: "Events", icon: "inbox" },
     { href: "/runs", label: "Runs", icon: "play" },
+    { href: "/hitl", label: "Human Input", icon: "hand" },
     { href: "/schedules", label: "Schedules", icon: "clock" },
     { href: "/settings", label: "Settings", icon: "settings" },
   ];
@@ -95,11 +98,20 @@
                         ? "📥"
                         : item.icon === "play"
                           ? "▶️"
-                          : item.icon === "clock"
-                            ? "🕐"
-                            : "⚙️"}</span
+                          : item.icon === "hand"
+                            ? "🙋"
+                            : item.icon === "clock"
+                              ? "🕐"
+                              : "⚙️"}</span
             >
-            <span>{item.label}</span>
+            <span class="flex-1">{item.label}</span>
+            {#if item.icon === "hand" && $pendingHitlCount > 0}
+              <span
+                class="bg-purple-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center"
+              >
+                {$pendingHitlCount}
+              </span>
+            {/if}
           </a>
         </li>
       {/each}

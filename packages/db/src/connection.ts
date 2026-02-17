@@ -162,6 +162,35 @@ export function createTestConnection(): DatabaseConnection {
       FOREIGN KEY (workflow_id) REFERENCES workflows(id),
       FOREIGN KEY (event_id) REFERENCES events(id)
     );
+
+    CREATE TABLE IF NOT EXISTS checkpoints (
+      id TEXT PRIMARY KEY,
+      run_id TEXT,
+      workflow_run_id TEXT,
+      sequence INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      data TEXT NOT NULL,
+      state TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES runs(id),
+      FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS hitl_requests (
+      id TEXT PRIMARY KEY,
+      workflow_run_id TEXT NOT NULL,
+      checkpoint_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      prompt TEXT NOT NULL,
+      context TEXT,
+      options TEXT,
+      response TEXT,
+      timeout_at INTEGER,
+      created_at INTEGER NOT NULL,
+      responded_at INTEGER,
+      FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id),
+      FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id)
+    );
   `);
 
   return drizzle(testSqlite, { schema });

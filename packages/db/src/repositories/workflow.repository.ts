@@ -151,6 +151,15 @@ export class WorkflowRepository {
 
   // Workflow Run methods
 
+  findRunsByStatus(status: WorkflowRunStatus): WorkflowRun[] {
+    const results = this.db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.status, status))
+      .all();
+    return results.map((r) => this.runToDomain(r));
+  }
+
   createRun(input: CreateWorkflowRunInput): WorkflowRun {
     const id = generateWorkflowRunId();
     const now = Date.now();

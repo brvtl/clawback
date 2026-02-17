@@ -118,7 +118,9 @@ export const workflowRuns = sqliteTable("workflow_runs", {
   eventId: text("event_id")
     .notNull()
     .references(() => events.id),
-  status: text("status", { enum: ["pending", "running", "completed", "failed", "cancelled"] })
+  status: text("status", {
+    enum: ["pending", "running", "completed", "failed", "cancelled", "waiting_for_input"],
+  })
     .notNull()
     .default("pending"),
   input: text("input").notNull(), // JSON string - trigger event payload
@@ -129,6 +131,50 @@ export const workflowRuns = sqliteTable("workflow_runs", {
   completedAt: integer("completed_at", { mode: "number" }),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
+// Checkpoints table - full state snapshots at each execution step
+export const checkpoints = sqliteTable("checkpoints", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").references(() => runs.id), // for skill runs (nullable)
+  workflowRunId: text("workflow_run_id").references(() => workflowRuns.id), // for workflow runs (nullable)
+  sequence: integer("sequence").notNull(), // ordering within a run (0-indexed)
+  type: text("type", {
+    enum: [
+      "assistant_message",
+      "tool_call",
+      "tool_result",
+      "skill_spawn",
+      "skill_complete",
+      "hitl_request",
+      "hitl_response",
+      "error",
+    ],
+  }).notNull(),
+  data: text("data").notNull(), // JSON: step-specific payload
+  state: text("state"), // JSON: full conversation state (messages array)
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+});
+
+// HITL (Human-in-the-Loop) requests table
+export const hitlRequests = sqliteTable("hitl_requests", {
+  id: text("id").primaryKey(),
+  workflowRunId: text("workflow_run_id")
+    .notNull()
+    .references(() => workflowRuns.id),
+  checkpointId: text("checkpoint_id")
+    .notNull()
+    .references(() => checkpoints.id),
+  status: text("status", { enum: ["pending", "responded", "expired", "cancelled"] })
+    .notNull()
+    .default("pending"),
+  prompt: text("prompt").notNull(), // what the AI is asking
+  context: text("context"), // JSON additional context
+  options: text("options"), // JSON string[] of suggested responses
+  response: text("response"), // human's answer (filled on respond)
+  timeoutAt: integer("timeout_at", { mode: "number" }), // optional expiry timestamp
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  respondedAt: integer("responded_at", { mode: "number" }),
 });
 
 // Notifications table - user notifications
@@ -169,3 +215,9 @@ export type NewDbWorkflow = typeof workflows.$inferInsert;
 
 export type WorkflowRun = typeof workflowRuns.$inferSelect;
 export type NewWorkflowRun = typeof workflowRuns.$inferInsert;
+
+export type Checkpoint = typeof checkpoints.$inferSelect;
+export type NewCheckpoint = typeof checkpoints.$inferInsert;
+
+export type HitlRequest = typeof hitlRequests.$inferSelect;
+export type NewHitlRequest = typeof hitlRequests.$inferInsert;

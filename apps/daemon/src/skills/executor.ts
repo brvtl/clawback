@@ -4,6 +4,7 @@ import {
   type Event,
   type ToolPermissions as SharedToolPermissions,
   type SkillModel,
+  getMcpSetupCommands,
 } from "@clawback/shared";
 import type {
   RunRepository,
@@ -12,9 +13,11 @@ import type {
   McpServerRepository,
   SkillRepository,
   McpServer,
+  CheckpointRepository,
 } from "@clawback/db";
 import type { RemoteSkillFetcher } from "../services/remote-skill-fetcher.js";
 import type { SkillReviewer } from "../services/skill-reviewer.js";
+import type { NotificationService } from "../services/notifications.js";
 
 // Default restricted permissions for remote skills
 const REMOTE_SKILL_PERMISSIONS: SharedToolPermissions = {
@@ -36,6 +39,8 @@ export interface ExecutorDependencies {
   skillRepo?: SkillRepository;
   remoteSkillFetcher?: RemoteSkillFetcher;
   skillReviewer?: SkillReviewer;
+  checkpointRepo?: CheckpointRepository;
+  notificationService?: NotificationService;
   anthropicApiKey?: string;
 }
 
@@ -61,6 +66,8 @@ export class SkillExecutor {
   private skillRepo?: SkillRepository;
   private remoteSkillFetcher?: RemoteSkillFetcher;
   private skillReviewer?: SkillReviewer;
+  private checkpointRepo?: CheckpointRepository;
+  private notificationService?: NotificationService;
   private anthropicApiKey?: string;
 
   constructor(deps: ExecutorDependencies) {
@@ -70,6 +77,8 @@ export class SkillExecutor {
     this.skillRepo = deps.skillRepo;
     this.remoteSkillFetcher = deps.remoteSkillFetcher;
     this.skillReviewer = deps.skillReviewer;
+    this.checkpointRepo = deps.checkpointRepo;
+    this.notificationService = deps.notificationService;
     this.anthropicApiKey = deps.anthropicApiKey;
 
     if (!deps.anthropicApiKey) {
@@ -253,7 +262,7 @@ export class SkillExecutor {
     }
 
     // Build MCP server configs from skill settings
-    const mcpServers = this.buildMcpServersConfig(skill);
+    const mcpServers = await this.buildMcpServersConfig(skill);
 
     const systemPrompt = this.buildSystemPrompt(skill, event);
     const toolCalls: ToolCallResult[] = [];
@@ -294,13 +303,30 @@ ${JSON.stringify(eventPayload, null, 2)}
         },
       });
 
+      let cpSequence = 0;
+
       for await (const msg of q) {
         if (msg.type === "assistant") {
           const content = (msg as { message: { content: unknown } }).message.content;
           if (Array.isArray(content)) {
-            for (const block of content as Array<{ type: string; text?: string }>) {
+            for (const block of content as Array<{
+              type: string;
+              text?: string;
+              name?: string;
+              input?: unknown;
+              id?: string;
+            }>) {
               if (block.type === "text" && block.text) {
                 finalResponse += block.text;
+                this.saveCheckpoint(_run.id, cpSequence++, "assistant_message", {
+                  text: block.text,
+                });
+              } else if (block.type === "tool_use") {
+                this.saveCheckpoint(_run.id, cpSequence++, "tool_call", {
+                  toolName: block.name,
+                  toolInput: block.input,
+                  toolUseId: block.id,
+                });
               }
             }
           }
@@ -308,10 +334,11 @@ ${JSON.stringify(eventPayload, null, 2)}
           const resultMsg = msg as { result?: unknown };
           if (resultMsg.result) {
             finalResponse = String(resultMsg.result);
+            this.saveCheckpoint(_run.id, cpSequence++, "tool_result", {
+              result: resultMsg.result,
+            });
           }
         }
-        // Note: Tool calls are handled internally by the SDK
-        // We could track them via tool_progress messages if needed
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Agent execution failed";
@@ -328,12 +355,12 @@ ${JSON.stringify(eventPayload, null, 2)}
   /**
    * Build MCP server configuration object from skill settings.
    * Resolves server names to full configs from the database.
+   * Runs any required setup commands (e.g. browser installation for Playwright).
    */
-  private buildMcpServersConfig(
+  private async buildMcpServersConfig(
     skill: Skill
-  ): Record<
-    string,
-    { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }
+  ): Promise<
+    Record<string, { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }>
   > {
     const mcpServers: Record<
       string,
@@ -349,8 +376,10 @@ ${JSON.stringify(eventPayload, null, 2)}
       for (const serverName of skill.mcpServers) {
         const globalServer = this.mcpServerRepo.findByName(serverName);
         if (globalServer?.enabled) {
-          mcpServers[serverName] = this.toSdkServerConfig(globalServer);
+          const sdkConfig = this.toSdkServerConfig(globalServer);
+          mcpServers[serverName] = sdkConfig;
           console.log(`[SkillExecutor] Added MCP server: ${serverName}`);
+          await this.runSetupCommands(serverName, sdkConfig.args);
         } else {
           console.warn(`[SkillExecutor] MCP server "${serverName}" not found or disabled`);
         }
@@ -358,17 +387,40 @@ ${JSON.stringify(eventPayload, null, 2)}
     } else {
       // Object with inline configs
       for (const [name, config] of Object.entries(skill.mcpServers)) {
+        const args = Array.isArray(config.args) ? config.args : [];
         mcpServers[name] = {
           type: "stdio",
           command: config.command,
-          args: Array.isArray(config.args) ? config.args : [],
+          args,
           env: config.env,
         };
         console.log(`[SkillExecutor] Added inline MCP server: ${name}`);
+        await this.runSetupCommands(name, args);
       }
     }
 
     return mcpServers;
+  }
+
+  /**
+   * Run setup commands for an MCP server if needed (e.g. Playwright browser install).
+   */
+  private async runSetupCommands(serverName: string, args: string[]): Promise<void> {
+    const setupCommands = getMcpSetupCommands(args);
+    if (setupCommands.length === 0) return;
+
+    const { execSync } = await import("child_process");
+    for (const cmd of setupCommands) {
+      try {
+        console.log(`[SkillExecutor] Running setup for ${serverName}: ${cmd}`);
+        execSync(cmd, { stdio: "pipe", timeout: 120_000 });
+      } catch (err) {
+        console.warn(
+          `[SkillExecutor] Setup command failed for ${serverName}: ${cmd}`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
   }
 
   /**
@@ -386,6 +438,38 @@ ${JSON.stringify(eventPayload, null, 2)}
       args: Array.isArray(server.args) ? server.args : [],
       env: server.env ?? undefined,
     };
+  }
+
+  private saveCheckpoint(
+    runId: string,
+    sequence: number,
+    type: "assistant_message" | "tool_call" | "tool_result" | "error",
+    data: unknown
+  ): void {
+    if (!this.checkpointRepo) return;
+
+    try {
+      const checkpoint = this.checkpointRepo.create({
+        runId,
+        sequence,
+        type,
+        data,
+      });
+
+      this.notificationService?.broadcastMessage({
+        type: "checkpoint",
+        runId,
+        checkpoint: {
+          id: checkpoint.id,
+          sequence: checkpoint.sequence,
+          type: checkpoint.type,
+          data,
+          createdAt: checkpoint.createdAt,
+        },
+      });
+    } catch (err) {
+      console.error("[SkillExecutor] Failed to save checkpoint:", err);
+    }
   }
 
   buildSystemPrompt(skill: Skill, event: Event): string {

@@ -11,6 +11,8 @@ import {
   McpServerRepository,
   ScheduledJobRepository,
   WorkflowRepository,
+  CheckpointRepository,
+  HitlRequestRepository,
 } from "@clawback/db";
 import { SkillRegistry } from "./skills/registry.js";
 import { SkillExecutor } from "./skills/executor.js";
@@ -33,6 +35,8 @@ export interface ServerContext {
   mcpServerRepo: McpServerRepository;
   scheduledJobRepo: ScheduledJobRepository;
   workflowRepo: WorkflowRepository;
+  checkpointRepo: CheckpointRepository;
+  hitlRequestRepo: HitlRequestRepository;
   skillRegistry: SkillRegistry;
   skillExecutor: SkillExecutor;
   eventQueue: EventQueue;
@@ -70,6 +74,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const mcpServerRepo = new McpServerRepository(db);
   const scheduledJobRepo = new ScheduledJobRepository(db);
   const workflowRepo = new WorkflowRepository(db);
+  const checkpointRepo = new CheckpointRepository(db);
+  const hitlRequestRepo = new HitlRequestRepository(db);
 
   // Initialize notification service
   const notificationService = new NotificationService({ enableDesktop: true });
@@ -105,6 +111,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skillRepo,
     remoteSkillFetcher,
     skillReviewer,
+    checkpointRepo,
+    notificationService,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   });
 
@@ -119,6 +127,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     eventRepo,
     runRepo,
     skillExecutor,
+    checkpointRepo,
+    hitlRequestRepo,
+    notificationService,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   });
 
@@ -145,6 +156,26 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
             `[Server] Executing cron-triggered workflow "${workflow.name}" for event ${event.id}`
           );
           const workflowRun = await workflowExecutor.execute(workflow, event);
+
+          // If paused for HITL, send info notification instead of success
+          if (workflowRun.status === "waiting_for_input") {
+            const notif = await notifRepo.create({
+              runId: workflowRun.id,
+              skillId: workflow.id,
+              type: "warning",
+              title: `Workflow "${workflow.name}" waiting for input`,
+              message: `Workflow is paused and waiting for human input`,
+            });
+            await notificationService.notify({
+              id: notif.id,
+              type: "warning",
+              title: notif.title,
+              message: notif.message,
+              skillId: workflow.id,
+              runId: workflowRun.id,
+            });
+            return;
+          }
 
           // Persist notification to database
           const notif = await notifRepo.create({
@@ -201,6 +232,26 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       try {
         console.log(`[Server] Executing workflow "${workflow.name}" for event ${event.id}`);
         const workflowRun = await workflowExecutor.execute(workflow, event);
+
+        // If paused for HITL, send info notification
+        if (workflowRun.status === "waiting_for_input") {
+          const notif = await notifRepo.create({
+            runId: workflowRun.id,
+            skillId: workflow.id,
+            type: "warning",
+            title: `Workflow "${workflow.name}" waiting for input`,
+            message: `Workflow is paused and waiting for human input`,
+          });
+          await notificationService.notify({
+            id: notif.id,
+            type: "warning",
+            title: notif.title,
+            message: notif.message,
+            skillId: workflow.id,
+            runId: workflowRun.id,
+          });
+          continue;
+        }
 
         // Persist notification to database
         const notif = await notifRepo.create({
@@ -290,6 +341,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     mcpServerRepo,
     scheduledJobRepo,
     workflowRepo,
+    checkpointRepo,
+    hitlRequestRepo,
     skillRegistry,
     skillExecutor,
     eventQueue,
@@ -310,26 +363,47 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   registerBuilderRoutes(server, context);
 
   // Register WebSocket route for real-time notifications
-  server.get("/ws", { websocket: true }, (socket) => {
+  server.get("/ws", { websocket: true }, (connection) => {
     const clientId = randomBytes(8).toString("hex");
+    const ws = (
+      connection as unknown as {
+        socket: {
+          send: (data: string) => void;
+          readyState: number;
+          on: (event: string, cb: () => void) => void;
+        };
+      }
+    ).socket;
 
     // Add connection to notification service
-    notificationService.addConnection(clientId, socket);
+    notificationService.addConnection(clientId, ws);
 
     // Handle connection close
-    socket.on("close", () => {
+    ws.on("close", () => {
       notificationService.removeConnection(clientId);
     });
 
     // Handle errors
-    socket.on("error", () => {
+    ws.on("error", () => {
       notificationService.removeConnection(clientId);
     });
 
     // Send welcome message
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    socket.send(JSON.stringify({ type: "connected", clientId }));
+    ws.send(JSON.stringify({ type: "connected", clientId }));
   });
+
+  // Log any workflow runs waiting for human input on startup
+  const waitingRuns = workflowRepo.findRunsByStatus("waiting_for_input");
+  if (waitingRuns.length > 0) {
+    console.log(
+      `[Server] Found ${waitingRuns.length} workflow run(s) waiting for human input:`,
+      waitingRuns.map((r) => r.id).join(", ")
+    );
+    const pendingHitl = hitlRequestRepo.findPending();
+    if (pendingHitl.length > 0) {
+      console.log(`[Server] Pending HITL requests: ${pendingHitl.map((r) => r.id).join(", ")}`);
+    }
+  }
 
   // Start the scheduler
   schedulerService.start();

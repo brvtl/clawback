@@ -1,21 +1,37 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { page } from "$app/stores";
   import { api, type ApiRun } from "$lib/api/client";
+  import { checkpointStore, type CheckpointData } from "$lib/stores/checkpoints";
 
   let run: ApiRun | null = null;
   let loading = true;
   let error: string | null = null;
 
+  $: runId = $page.params.id as string;
+  $: checkpoints = ($checkpointStore.byRunId[runId] ?? []) as CheckpointData[];
+
   onMount(async () => {
     try {
-      const response = await api.getRun($page.params.id);
+      const response = await api.getRun(runId);
       run = response.run;
+
+      // Fetch checkpoints
+      try {
+        const cpResponse = await api.getRunCheckpoints(runId);
+        checkpointStore.setCheckpoints(runId, cpResponse.checkpoints);
+      } catch {
+        // Checkpoints may not exist yet
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : "Failed to load run";
     } finally {
       loading = false;
     }
+  });
+
+  onDestroy(() => {
+    checkpointStore.clear(runId);
   });
 
   function formatDuration(start: number | null, end: number | null): string {
@@ -43,6 +59,48 @@
   function formatJson(data: unknown): string {
     if (typeof data === "string") return data;
     return JSON.stringify(data, null, 2);
+  }
+
+  function toRecord(data: unknown): Record<string, unknown> {
+    return (data ?? {}) as Record<string, unknown>;
+  }
+
+  function getCheckpointIcon(type: string): string {
+    switch (type) {
+      case "assistant_message":
+        return "💬";
+      case "tool_call":
+        return "🔧";
+      case "tool_result":
+        return "📤";
+      case "skill_spawn":
+        return "🚀";
+      case "skill_complete":
+        return "✅";
+      case "hitl_request":
+        return "🙋";
+      case "hitl_response":
+        return "💡";
+      case "error":
+        return "❌";
+      default:
+        return "📍";
+    }
+  }
+
+  function getCheckpointLabel(type: string): string {
+    switch (type) {
+      case "assistant_message":
+        return "Message";
+      case "tool_call":
+        return "Tool Call";
+      case "tool_result":
+        return "Tool Result";
+      case "error":
+        return "Error";
+      default:
+        return type;
+    }
   }
 
   $: parsedOutput = run?.output ? parseJson(run.output) : null;
@@ -108,6 +166,67 @@
           </div>
         </div>
       </div>
+
+      <!-- Live Activity Timeline (Checkpoints) -->
+      {#if checkpoints.length > 0}
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6">
+          <h2 class="text-lg font-semibold mb-4">
+            Activity Timeline
+            {#if run.status === "running"}
+              <span class="inline-block w-2 h-2 bg-blue-400 rounded-full animate-pulse ml-2"></span>
+            {/if}
+          </h2>
+          <div class="space-y-3">
+            {#each checkpoints as cp}
+              {@const cpData = toRecord(cp.data)}
+              <div class="flex gap-3 items-start">
+                <span class="text-lg mt-0.5">{getCheckpointIcon(cp.type)}</span>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-sm font-medium text-gray-300"
+                      >{getCheckpointLabel(cp.type)}</span
+                    >
+                    <span class="text-xs text-gray-500"
+                      >{new Date(cp.createdAt).toLocaleTimeString()}</span
+                    >
+                  </div>
+                  {#if cp.type === "assistant_message" && cpData.text}
+                    <p class="text-sm text-gray-400 whitespace-pre-wrap line-clamp-3">
+                      {cpData.text}
+                    </p>
+                  {:else if cp.type === "tool_call" && cpData.toolName}
+                    <div class="text-sm">
+                      <span class="font-mono text-blue-400">{cpData.toolName}</span>
+                    </div>
+                  {:else if cp.type === "tool_result"}
+                    <details class="text-sm">
+                      <summary class="text-gray-400 cursor-pointer hover:text-gray-300"
+                        >Result details</summary
+                      >
+                      <pre
+                        class="mt-1 bg-gray-900 rounded p-2 text-xs text-gray-400 overflow-x-auto max-h-32">{formatJson(
+                          cpData
+                        )}</pre>
+                    </details>
+                  {:else if cp.type === "error"}
+                    <p class="text-sm text-red-400">{cpData.error ?? "Unknown error"}</p>
+                  {:else}
+                    <details class="text-sm">
+                      <summary class="text-gray-400 cursor-pointer hover:text-gray-300"
+                        >Details</summary
+                      >
+                      <pre
+                        class="mt-1 bg-gray-900 rounded p-2 text-xs text-gray-400 overflow-x-auto max-h-32">{formatJson(
+                          cpData
+                        )}</pre>
+                    </details>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       <!-- Output -->
       {#if parsedOutput}

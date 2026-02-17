@@ -11,6 +11,7 @@
     failed: "bg-red-500/20 text-red-400 border-red-500/30",
     error: "bg-red-500/20 text-red-400 border-red-500/30",
     cancelled: "bg-gray-500/20 text-gray-400 border-gray-500/30",
+    waiting_for_input: "bg-purple-500/20 text-purple-400 border-purple-500/30",
     info: "bg-blue-500/20 text-blue-400 border-blue-500/30",
     warning: "bg-orange-500/20 text-orange-400 border-orange-500/30",
   };

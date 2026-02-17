@@ -5,8 +5,11 @@ import type {
   SkillRepository,
   RunRepository,
   EventRepository,
+  CheckpointRepository,
+  HitlRequestRepository,
 } from "@clawback/db";
 import type { SkillExecutor } from "../skills/executor.js";
+import type { NotificationService } from "./notifications.js";
 
 export interface WorkflowExecutorDependencies {
   workflowRepo: WorkflowRepository;
@@ -14,6 +17,9 @@ export interface WorkflowExecutorDependencies {
   eventRepo: EventRepository;
   runRepo: RunRepository;
   skillExecutor: SkillExecutor;
+  checkpointRepo?: CheckpointRepository;
+  hitlRequestRepo?: HitlRequestRepository;
+  notificationService?: NotificationService;
   anthropicApiKey?: string;
 }
 
@@ -84,7 +90,41 @@ const ORCHESTRATOR_TOOLS: Anthropic.Tool[] = [
       required: ["error"],
     },
   },
+  {
+    name: "request_human_input",
+    description:
+      "Pause the workflow and request input from a human operator. Use this when you need confirmation, clarification, or a decision before proceeding. The workflow will be paused until the human responds.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        prompt: {
+          type: "string",
+          description: "What you need from the human - be specific and clear",
+        },
+        context: {
+          type: "string",
+          description: "Additional context to help the human understand the situation",
+        },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description: "Suggested responses the human can choose from",
+        },
+        timeout_minutes: {
+          type: "number",
+          description: "How long to wait for a response before the request expires",
+        },
+      },
+      required: ["prompt"],
+    },
+  },
 ];
+
+export interface OrchestratorLoopResult {
+  output: unknown;
+  paused?: boolean;
+  hitlRequestId?: string;
+}
 
 export class WorkflowExecutor {
   private anthropic: Anthropic | null = null;
@@ -93,6 +133,9 @@ export class WorkflowExecutor {
   private eventRepo: EventRepository;
   private runRepo: RunRepository;
   private skillExecutor: SkillExecutor;
+  private checkpointRepo?: CheckpointRepository;
+  private hitlRequestRepo?: HitlRequestRepository;
+  private notificationService?: NotificationService;
 
   constructor(deps: WorkflowExecutorDependencies) {
     this.workflowRepo = deps.workflowRepo;
@@ -100,6 +143,9 @@ export class WorkflowExecutor {
     this.eventRepo = deps.eventRepo;
     this.runRepo = deps.runRepo;
     this.skillExecutor = deps.skillExecutor;
+    this.checkpointRepo = deps.checkpointRepo;
+    this.hitlRequestRepo = deps.hitlRequestRepo;
+    this.notificationService = deps.notificationService;
 
     if (deps.anthropicApiKey) {
       this.anthropic = new Anthropic({ apiKey: deps.anthropicApiKey });
@@ -137,6 +183,15 @@ export class WorkflowExecutor {
       // Run the orchestrator loop
       const result = await this.runOrchestratorLoop(workflow, event, workflowRun);
 
+      // Check if workflow was paused for HITL
+      if (result.paused) {
+        return {
+          ...workflowRun,
+          status: "waiting_for_input" as const,
+          output: result.output,
+        };
+      }
+
       // Update status to completed
       this.workflowRepo.updateRunStatus(workflowRun.id, "completed", {
         output: result.output,
@@ -158,8 +213,9 @@ export class WorkflowExecutor {
   private async runOrchestratorLoop(
     workflow: Workflow,
     event: Event,
-    workflowRun: WorkflowRun
-  ): Promise<{ output: unknown }> {
+    workflowRun: WorkflowRun,
+    resumeMessages?: Anthropic.MessageParam[]
+  ): Promise<OrchestratorLoopResult> {
     if (!this.anthropic) {
       throw new Error("Anthropic client not initialized");
     }
@@ -181,13 +237,16 @@ export class WorkflowExecutor {
     const model =
       workflow.orchestratorModel === "opus" ? "claude-opus-4-20250514" : "claude-sonnet-4-20250514";
 
-    let messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
+    let messages: Anthropic.MessageParam[] = resumeMessages ?? [
+      { role: "user", content: userMessage },
+    ];
     const skillResults: SkillRunResult[] = [];
     let continueLoop = true;
     let finalOutput: unknown = null;
+    let cpSequence = this.checkpointRepo?.getNextSequence(undefined, workflowRun.id) ?? 0;
 
     console.log(
-      `[WorkflowExecutor] Starting orchestration for workflow "${workflow.name}" with model ${model}`
+      `[WorkflowExecutor] Starting orchestration for workflow "${workflow.name}" with model ${model}${resumeMessages ? " (resumed)" : ""}`
     );
 
     while (continueLoop) {
@@ -204,22 +263,46 @@ export class WorkflowExecutor {
         (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
       );
 
+      // Checkpoint text blocks from assistant response
+      const textBlocks = response.content.filter(
+        (block): block is Anthropic.TextBlock => block.type === "text"
+      );
+      if (textBlocks.length > 0) {
+        const text = textBlocks.map((b) => b.text).join("\n");
+        this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "assistant_message", {
+          text,
+        });
+      }
+
       if (toolUseBlocks.length > 0) {
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
         for (const toolUse of toolUseBlocks) {
           /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
-          const toolName = toolUse.name as string;
+          const toolName = toolUse.name;
           const toolInput = toolUse.input as Record<string, unknown>;
-          const toolId = toolUse.id as string;
+          const toolId = toolUse.id;
           /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 
           console.log(`[WorkflowExecutor] Tool call: ${toolName}`);
+
+          // Checkpoint tool call
+          this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "tool_call", {
+            toolName,
+            toolInput,
+            toolUseId: toolId,
+          });
 
           let result: string;
           let isError = false;
 
           if (toolName === "spawn_skill") {
+            this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "skill_spawn", {
+              skillId: toolInput.skillId,
+              inputs: toolInput.inputs,
+              reason: toolInput.reason,
+            });
+
             const spawnResult = await this.handleSpawnSkill(
               toolInput,
               event,
@@ -235,6 +318,12 @@ export class WorkflowExecutor {
                 skillResults.push(spawnResult.result);
               }
             }
+
+            this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "skill_complete", {
+              skillId: toolInput.skillId,
+              status: isError ? "failed" : "completed",
+              result: isError ? spawnResult.error : spawnResult.result,
+            });
           } else if (toolName === "complete_workflow") {
             const summary = toolInput.summary as string;
             const results = toolInput.results as Record<string, unknown> | undefined;
@@ -256,14 +345,82 @@ export class WorkflowExecutor {
             };
             result = JSON.stringify({ failed: true, error });
             continueLoop = false;
+
+            this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "error", {
+              error,
+              partialResults,
+            });
+
             console.log(`[WorkflowExecutor] Workflow failed: ${error}`);
 
             // Throw error to trigger failed status
             throw new Error(error);
+          } else if (toolName === "request_human_input") {
+            // HITL: save checkpoint with full state, create request, pause
+            const hitlResult = this.handleHitlRequest(
+              toolInput,
+              toolId,
+              workflowRun,
+              messages,
+              response.content,
+              cpSequence
+            );
+
+            if (hitlResult) {
+              // Broadcast HITL request
+              this.notificationService?.broadcastMessage({
+                type: "hitl_request",
+                workflowRunId: workflowRun.id,
+                request: {
+                  id: hitlResult.hitlRequestId,
+                  prompt: toolInput.prompt as string,
+                  context: toolInput.context,
+                  options: toolInput.options,
+                  timeoutAt: toolInput.timeout_minutes
+                    ? Date.now() + (toolInput.timeout_minutes as number) * 60 * 1000
+                    : undefined,
+                },
+              });
+
+              // Desktop notification
+              void this.notificationService?.sendDesktopNotification({
+                id: hitlResult.hitlRequestId,
+                type: "warning",
+                title: "Human Input Needed",
+                message: toolInput.prompt as string,
+              });
+
+              return {
+                output: finalOutput,
+                paused: true,
+                hitlRequestId: hitlResult.hitlRequestId,
+              };
+            }
+
+            // Fallback if HITL repos not available
+            result = JSON.stringify({
+              error: "Human-in-the-loop is not configured",
+            });
+            isError = true;
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolId,
+              content: result,
+              is_error: isError,
+            });
+            continue;
           } else {
             result = JSON.stringify({ error: `Unknown tool: ${toolName}` });
             isError = true;
           }
+
+          // Checkpoint tool result
+          this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "tool_result", {
+            toolName,
+            toolUseId: toolId,
+            result,
+            isError,
+          });
 
           toolResults.push({
             type: "tool_result",
@@ -281,10 +438,6 @@ export class WorkflowExecutor {
         ];
       } else {
         // No tool use - check if we have a final response
-        const textBlocks = response.content.filter(
-          (block): block is Anthropic.TextBlock => block.type === "text"
-        );
-
         if (textBlocks.length > 0 && !finalOutput) {
           finalOutput = {
             summary: textBlocks.map((b) => b.text).join("\n"),
@@ -409,6 +562,210 @@ Analyze the event and orchestrate the appropriate skills to complete the workflo
     }
   }
 
+  private saveWorkflowCheckpoint(
+    workflowRunId: string,
+    sequence: number,
+    type:
+      | "assistant_message"
+      | "tool_call"
+      | "tool_result"
+      | "skill_spawn"
+      | "skill_complete"
+      | "hitl_request"
+      | "hitl_response"
+      | "error",
+    data: unknown,
+    state?: unknown
+  ): void {
+    if (!this.checkpointRepo) return;
+
+    try {
+      const checkpoint = this.checkpointRepo.create({
+        workflowRunId,
+        sequence,
+        type,
+        data,
+        state,
+      });
+
+      this.notificationService?.broadcastMessage({
+        type: "checkpoint",
+        workflowRunId,
+        checkpoint: {
+          id: checkpoint.id,
+          sequence: checkpoint.sequence,
+          type: checkpoint.type,
+          data,
+          createdAt: checkpoint.createdAt,
+        },
+      });
+    } catch (err) {
+      console.error("[WorkflowExecutor] Failed to save checkpoint:", err);
+    }
+  }
+
+  private handleHitlRequest(
+    toolInput: Record<string, unknown>,
+    toolUseId: string,
+    workflowRun: WorkflowRun,
+    messages: Anthropic.MessageParam[],
+    responseContent: Anthropic.ContentBlock[],
+    cpSequence: number
+  ): { hitlRequestId: string } | null {
+    if (!this.checkpointRepo || !this.hitlRequestRepo) return null;
+
+    const prompt = toolInput.prompt as string;
+    const context = toolInput.context as string | undefined;
+    const options = toolInput.options as string[] | undefined;
+    const timeoutMinutes = toolInput.timeout_minutes as number | undefined;
+
+    // Build the full messages state including the current assistant response
+    const fullMessages: Anthropic.MessageParam[] = [
+      ...messages,
+      { role: "assistant", content: responseContent },
+    ];
+
+    // Save checkpoint with full state
+    const checkpoint = this.checkpointRepo.create({
+      workflowRunId: workflowRun.id,
+      sequence: cpSequence,
+      type: "hitl_request",
+      data: { prompt, context, options, toolUseId },
+      state: fullMessages,
+    });
+
+    // Create HITL request
+    const hitlRequest = this.hitlRequestRepo.create({
+      workflowRunId: workflowRun.id,
+      checkpointId: checkpoint.id,
+      prompt,
+      context: context ? { text: context } : undefined,
+      options,
+      timeoutAt: timeoutMinutes ? Date.now() + timeoutMinutes * 60 * 1000 : undefined,
+    });
+
+    // Set workflow run status to waiting_for_input
+    this.workflowRepo.updateRunStatus(workflowRun.id, "waiting_for_input");
+
+    this.notificationService?.broadcastMessage({
+      type: "run_status",
+      workflowRunId: workflowRun.id,
+      status: "waiting_for_input",
+    });
+
+    console.log(
+      `[WorkflowExecutor] HITL request created: ${hitlRequest.id} for workflow run ${workflowRun.id}`
+    );
+
+    return { hitlRequestId: hitlRequest.id };
+  }
+
+  async resumeFromCheckpoint(hitlRequestId: string): Promise<WorkflowRun> {
+    if (!this.anthropic) {
+      throw new Error("Anthropic client not initialized");
+    }
+    if (!this.hitlRequestRepo || !this.checkpointRepo) {
+      throw new Error("HITL repos not configured");
+    }
+
+    // Load HITL request
+    const hitlRequest = this.hitlRequestRepo.findById(hitlRequestId);
+    if (!hitlRequest) {
+      throw new Error(`HITL request ${hitlRequestId} not found`);
+    }
+    if (hitlRequest.status !== "responded") {
+      throw new Error(`HITL request ${hitlRequestId} has not been responded to`);
+    }
+
+    // Load checkpoint
+    const checkpoint = this.checkpointRepo.findById(hitlRequest.checkpointId);
+    if (!checkpoint?.state) {
+      throw new Error(`Checkpoint ${hitlRequest.checkpointId} not found or has no state`);
+    }
+
+    // Parse saved state → reconstruct messages
+    const savedMessages = JSON.parse(checkpoint.state) as Anthropic.MessageParam[];
+
+    // Parse checkpoint data to get toolUseId
+    const cpData = JSON.parse(checkpoint.data) as { toolUseId: string };
+
+    // Append the tool_result with the human's response
+    const messages: Anthropic.MessageParam[] = [
+      ...savedMessages,
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: cpData.toolUseId,
+            content: JSON.stringify({
+              response: hitlRequest.response,
+              respondedAt: hitlRequest.respondedAt,
+            }),
+          },
+        ],
+      },
+    ];
+
+    // Save hitl_response checkpoint
+    this.saveWorkflowCheckpoint(
+      hitlRequest.workflowRunId,
+      this.checkpointRepo.getNextSequence(undefined, hitlRequest.workflowRunId),
+      "hitl_response",
+      { hitlRequestId, response: hitlRequest.response }
+    );
+
+    // Load workflow + event from workflow run
+    const workflowRun = this.workflowRepo.findRunById(hitlRequest.workflowRunId);
+    if (!workflowRun) {
+      throw new Error(`Workflow run ${hitlRequest.workflowRunId} not found`);
+    }
+
+    const workflow = this.workflowRepo.findById(workflowRun.workflowId);
+    if (!workflow) {
+      throw new Error(`Workflow ${workflowRun.workflowId} not found`);
+    }
+
+    const event = await this.eventRepo.findById(workflowRun.eventId);
+    if (!event) {
+      throw new Error(`Event ${workflowRun.eventId} not found`);
+    }
+
+    // Set status back to running
+    this.workflowRepo.updateRunStatus(workflowRun.id, "running");
+
+    this.notificationService?.broadcastMessage({
+      type: "run_status",
+      workflowRunId: workflowRun.id,
+      status: "running",
+    });
+
+    console.log(
+      `[WorkflowExecutor] Resuming workflow run ${workflowRun.id} from HITL request ${hitlRequestId}`
+    );
+
+    try {
+      // Resume the orchestrator loop with restored messages
+      const result = await this.runOrchestratorLoop(workflow, event, workflowRun, messages);
+
+      if (result.paused) {
+        return { ...workflowRun, status: "waiting_for_input" as const, output: result.output };
+      }
+
+      this.workflowRepo.updateRunStatus(workflowRun.id, "completed", {
+        output: result.output,
+      });
+
+      return { ...workflowRun, status: "completed", output: result.output };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      this.workflowRepo.updateRunStatus(workflowRun.id, "failed", {
+        error: errorMessage,
+      });
+      throw error;
+    }
+  }
+
   private buildOrchestratorPrompt(workflow: Workflow, skills: Skill[], event: Event): string {
     const skillDescriptions = skills
       .map(
@@ -438,8 +795,9 @@ ${skillDescriptions}
 3. **Spawn skills** using the \`spawn_skill\` tool with appropriate inputs
 4. **Handle results** - check skill outputs and decide next steps
 5. **Handle errors** - if a skill fails, decide whether to retry, skip, or fail the workflow
-6. **Complete the workflow** - call \`complete_workflow\` with a summary when done
-7. **Fail gracefully** - call \`fail_workflow\` if the workflow cannot be completed
+6. **Request human input** - use \`request_human_input\` when you need confirmation, clarification, or a decision before proceeding
+7. **Complete the workflow** - call \`complete_workflow\` with a summary when done
+8. **Fail gracefully** - call \`fail_workflow\` if the workflow cannot be completed
 
 ## Event Context
 - Source: ${event.source}

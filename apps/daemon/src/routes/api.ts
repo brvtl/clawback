@@ -787,6 +787,28 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
     }
   );
 
+  // Get checkpoints for a workflow run
+  server.get<{ Params: { workflowId: string; runId: string } }>(
+    "/api/workflows/:workflowId/runs/:runId/checkpoints",
+    async (
+      request: FastifyRequest<{ Params: { workflowId: string; runId: string } }>,
+      reply: FastifyReply
+    ) => {
+      const run = context.workflowRepo.findRunById(request.params.runId);
+      if (!run || run.workflowId !== request.params.workflowId) {
+        return reply.status(404).send({ error: "Workflow run not found" });
+      }
+
+      const checkpoints = context.checkpointRepo.findByWorkflowRunId(request.params.runId);
+      // Parse JSON data for client consumption
+      const parsed = checkpoints.map((cp) => ({
+        ...cp,
+        data: JSON.parse(cp.data) as unknown,
+      }));
+      return reply.send({ checkpoints: parsed });
+    }
+  );
+
   // Manually trigger a workflow
   server.post<{ Params: { id: string } }>(
     "/api/workflows/:id/trigger",
@@ -823,6 +845,132 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       void context.workflowExecutor.execute(workflow, event);
 
       return reply.send({ workflowRun, event });
+    }
+  );
+
+  // ======================
+  // Checkpoint Endpoints
+  // ======================
+
+  // Get checkpoints for a skill run
+  server.get<{ Params: { id: string } }>(
+    "/api/runs/:id/checkpoints",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const run = await context.runRepo.findById(request.params.id);
+      if (!run) {
+        return reply.status(404).send({ error: "Run not found" });
+      }
+
+      const checkpoints = context.checkpointRepo.findByRunId(request.params.id);
+      const parsed = checkpoints.map((cp) => ({
+        ...cp,
+        data: JSON.parse(cp.data) as unknown,
+      }));
+      return reply.send({ checkpoints: parsed });
+    }
+  );
+
+  // Get checkpoints for a workflow run (by workflow run ID directly)
+  server.get<{ Params: { id: string } }>(
+    "/api/workflow-runs/:id/checkpoints",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const checkpoints = context.checkpointRepo.findByWorkflowRunId(request.params.id);
+      const parsed = checkpoints.map((cp) => ({
+        ...cp,
+        data: JSON.parse(cp.data) as unknown,
+      }));
+      return reply.send({ checkpoints: parsed });
+    }
+  );
+
+  // ======================
+  // HITL Endpoints
+  // ======================
+
+  // List pending HITL requests
+  server.get("/api/hitl-requests", async (_request: FastifyRequest, reply: FastifyReply) => {
+    const requests = context.hitlRequestRepo.findPending();
+    const parsed = requests.map((r) => ({
+      ...r,
+      context: r.context ? (JSON.parse(r.context) as unknown) : null,
+      options: r.options ? (JSON.parse(r.options) as unknown) : null,
+    }));
+    return reply.send({ requests: parsed });
+  });
+
+  // Get HITL request details
+  server.get<{ Params: { id: string } }>(
+    "/api/hitl-requests/:id",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const hitlRequest = context.hitlRequestRepo.findById(request.params.id);
+      if (!hitlRequest) {
+        return reply.status(404).send({ error: "HITL request not found" });
+      }
+
+      return reply.send({
+        request: {
+          ...hitlRequest,
+          context: hitlRequest.context ? (JSON.parse(hitlRequest.context) as unknown) : null,
+          options: hitlRequest.options ? (JSON.parse(hitlRequest.options) as unknown) : null,
+        },
+      });
+    }
+  );
+
+  // Submit human response to HITL request
+  server.post<{ Params: { id: string } }>(
+    "/api/hitl-requests/:id/respond",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const body = request.body as { response: string };
+      if (!body.response) {
+        return reply.status(400).send({ error: "response is required" });
+      }
+
+      const hitlRequest = context.hitlRequestRepo.respond(request.params.id, body.response);
+      if (!hitlRequest) {
+        return reply.status(404).send({ error: "HITL request not found or not pending" });
+      }
+
+      // Resume workflow execution asynchronously
+      void context.workflowExecutor.resumeFromCheckpoint(request.params.id).catch((err) => {
+        console.error(
+          `[API] Failed to resume workflow from HITL request ${request.params.id}:`,
+          err
+        );
+      });
+
+      return reply.send({
+        request: {
+          ...hitlRequest,
+          context: hitlRequest.context ? (JSON.parse(hitlRequest.context) as unknown) : null,
+          options: hitlRequest.options ? (JSON.parse(hitlRequest.options) as unknown) : null,
+        },
+        message: "Workflow resuming",
+      });
+    }
+  );
+
+  // Cancel HITL request
+  server.post<{ Params: { id: string } }>(
+    "/api/hitl-requests/:id/cancel",
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const hitlRequest = context.hitlRequestRepo.cancel(request.params.id);
+      if (!hitlRequest) {
+        return reply.status(404).send({ error: "HITL request not found or not pending" });
+      }
+
+      // Mark the workflow run as failed
+      context.workflowRepo.updateRunStatus(hitlRequest.workflowRunId, "failed", {
+        error: "Human-in-the-loop request was cancelled",
+      });
+
+      context.notificationService.broadcastMessage({
+        type: "run_status",
+        workflowRunId: hitlRequest.workflowRunId,
+        status: "failed",
+      });
+
+      return reply.send({ request: hitlRequest, message: "HITL request cancelled" });
     }
   );
 }

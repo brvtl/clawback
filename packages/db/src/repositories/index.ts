@@ -5,3 +5,5 @@ export * from "./skill.repository.js";
 export * from "./mcp-server.repository.js";
 export * from "./scheduled-job.repository.js";
 export * from "./workflow.repository.js";
+export * from "./checkpoint.repository.js";
+export * from "./hitl-request.repository.js";

@@ -36,3 +36,11 @@ export function generateWorkflowId(): string {
 export function generateWorkflowRunId(): string {
   return generateId("wfrun");
 }
+
+export function generateCheckpointId(): string {
+  return generateId("cp");
+}
+
+export function generateHitlRequestId(): string {
+  return generateId("hitl");
+}

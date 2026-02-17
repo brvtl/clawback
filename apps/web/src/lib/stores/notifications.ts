@@ -1,6 +1,8 @@
 import { writable, derived } from "svelte/store";
 import { browser } from "$app/environment";
 import { api, type ApiNotification } from "$lib/api/client";
+import { checkpointStore } from "./checkpoints";
+import { hitlStore } from "./hitl";
 
 interface NotificationState {
   notifications: ApiNotification[];
@@ -97,12 +99,43 @@ function createNotificationStore() {
 
         wsConnection.onmessage = (event) => {
           try {
-            const data = JSON.parse(event.data as string) as {
-              type: string;
-              notification?: ApiNotification;
-            };
+            const data = JSON.parse(event.data as string) as Record<string, unknown>;
+
             if (data.type === "notification" && data.notification) {
-              this.add(data.notification);
+              this.add(data.notification as ApiNotification);
+            } else if (data.type === "checkpoint") {
+              const runId = (data.runId ?? data.workflowRunId) as string;
+              if (runId && data.checkpoint) {
+                checkpointStore.addCheckpoint(
+                  runId,
+                  data.checkpoint as {
+                    id: string;
+                    sequence: number;
+                    type: string;
+                    data: unknown;
+                    createdAt: number;
+                  }
+                );
+              }
+            } else if (data.type === "hitl_request" && data.request) {
+              const req = data.request as {
+                id: string;
+                prompt: string;
+                context?: unknown;
+                options?: string[];
+                timeoutAt?: number;
+              };
+              hitlStore.addRequest({
+                id: req.id,
+                workflowRunId: data.workflowRunId as string,
+                checkpointId: "",
+                status: "pending",
+                prompt: req.prompt,
+                context: req.context,
+                options: req.options,
+                timeoutAt: req.timeoutAt,
+                createdAt: Date.now(),
+              });
             }
           } catch (e) {
             console.error("Failed to parse WebSocket message:", e);

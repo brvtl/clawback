@@ -101,7 +101,7 @@ export interface ApiWorkflowRun {
   id: string;
   workflowId: string;
   eventId: string;
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "waiting_for_input";
   input: unknown;
   output?: unknown;
   error?: string;
@@ -110,6 +110,30 @@ export interface ApiWorkflowRun {
   completedAt?: number;
   createdAt?: number;
   updatedAt?: number;
+}
+
+export interface ApiCheckpoint {
+  id: string;
+  runId?: string;
+  workflowRunId?: string;
+  sequence: number;
+  type: string;
+  data: unknown;
+  createdAt: number;
+}
+
+export interface ApiHitlRequest {
+  id: string;
+  workflowRunId: string;
+  checkpointId: string;
+  status: "pending" | "responded" | "expired" | "cancelled";
+  prompt: string;
+  context?: unknown;
+  options?: string[];
+  response?: string;
+  timeoutAt?: number;
+  createdAt: number;
+  respondedAt?: number;
 }
 
 export interface ApiScheduledJob {
@@ -392,6 +416,59 @@ class ApiClient {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
     });
+  }
+
+  // Checkpoint methods
+  async getRunCheckpoints(runId: string): Promise<{ checkpoints: ApiCheckpoint[] }> {
+    return this.fetch<{ checkpoints: ApiCheckpoint[] }>(`/api/runs/${runId}/checkpoints`);
+  }
+
+  async getWorkflowRunCheckpoints(
+    workflowId: string,
+    runId: string
+  ): Promise<{ checkpoints: ApiCheckpoint[] }> {
+    return this.fetch<{ checkpoints: ApiCheckpoint[] }>(
+      `/api/workflows/${workflowId}/runs/${runId}/checkpoints`
+    );
+  }
+
+  async getCheckpointsByWorkflowRunId(
+    workflowRunId: string
+  ): Promise<{ checkpoints: ApiCheckpoint[] }> {
+    return this.fetch<{ checkpoints: ApiCheckpoint[] }>(
+      `/api/workflow-runs/${workflowRunId}/checkpoints`
+    );
+  }
+
+  // HITL methods
+  async getHitlRequests(): Promise<{ requests: ApiHitlRequest[] }> {
+    return this.fetch<{ requests: ApiHitlRequest[] }>("/api/hitl-requests");
+  }
+
+  async getHitlRequest(id: string): Promise<{ request: ApiHitlRequest }> {
+    return this.fetch<{ request: ApiHitlRequest }>(`/api/hitl-requests/${id}`);
+  }
+
+  async respondToHitlRequest(
+    id: string,
+    response: string
+  ): Promise<{ request: ApiHitlRequest; message: string }> {
+    return this.fetch<{ request: ApiHitlRequest; message: string }>(
+      `/api/hitl-requests/${id}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify({ response }),
+      }
+    );
+  }
+
+  async cancelHitlRequest(id: string): Promise<{ request: ApiHitlRequest; message: string }> {
+    return this.fetch<{ request: ApiHitlRequest; message: string }>(
+      `/api/hitl-requests/${id}/cancel`,
+      {
+        method: "POST",
+      }
+    );
   }
 }
 

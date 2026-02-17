@@ -113,6 +113,25 @@ export class NotificationService {
   }
 
   /**
+   * Broadcast an arbitrary message to all connected WebSocket clients.
+   * Used for non-notification messages like checkpoints and status updates.
+   */
+  broadcastMessage(message: Record<string, unknown>): void {
+    const data = JSON.stringify(message);
+
+    for (const [id, socket] of this.connections.entries()) {
+      if (socket.readyState === WS_OPEN) {
+        try {
+          socket.send(data);
+        } catch (err) {
+          console.error(`Failed to send to client ${id}:`, err);
+          this.connections.delete(id);
+        }
+      }
+    }
+  }
+
+  /**
    * Send notification via all channels (desktop + WebSocket).
    */
   async notify(payload: NotificationPayload): Promise<void> {
