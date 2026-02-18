@@ -4,7 +4,6 @@ import {
   type Event,
   type ToolPermissions as SharedToolPermissions,
   type SkillModel,
-  getMcpSetupCommands,
 } from "@clawback/shared";
 import type {
   RunRepository,
@@ -262,7 +261,7 @@ export class SkillExecutor {
     }
 
     // Build MCP server configs from skill settings
-    const mcpServers = await this.buildMcpServersConfig(skill);
+    const mcpServers = this.buildMcpServersConfig(skill);
 
     const systemPrompt = this.buildSystemPrompt(skill, event);
     const toolCalls: ToolCallResult[] = [];
@@ -355,12 +354,12 @@ ${JSON.stringify(eventPayload, null, 2)}
   /**
    * Build MCP server configuration object from skill settings.
    * Resolves server names to full configs from the database.
-   * Runs any required setup commands (e.g. browser installation for Playwright).
    */
-  private async buildMcpServersConfig(
+  private buildMcpServersConfig(
     skill: Skill
-  ): Promise<
-    Record<string, { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }>
+  ): Record<
+    string,
+    { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }
   > {
     const mcpServers: Record<
       string,
@@ -376,10 +375,8 @@ ${JSON.stringify(eventPayload, null, 2)}
       for (const serverName of skill.mcpServers) {
         const globalServer = this.mcpServerRepo.findByName(serverName);
         if (globalServer?.enabled) {
-          const sdkConfig = this.toSdkServerConfig(globalServer);
-          mcpServers[serverName] = sdkConfig;
+          mcpServers[serverName] = this.toSdkServerConfig(globalServer);
           console.log(`[SkillExecutor] Added MCP server: ${serverName}`);
-          await this.runSetupCommands(serverName, sdkConfig.args);
         } else {
           console.warn(`[SkillExecutor] MCP server "${serverName}" not found or disabled`);
         }
@@ -387,40 +384,17 @@ ${JSON.stringify(eventPayload, null, 2)}
     } else {
       // Object with inline configs
       for (const [name, config] of Object.entries(skill.mcpServers)) {
-        const args = Array.isArray(config.args) ? config.args : [];
         mcpServers[name] = {
           type: "stdio",
           command: config.command,
-          args,
+          args: Array.isArray(config.args) ? config.args : [],
           env: config.env,
         };
         console.log(`[SkillExecutor] Added inline MCP server: ${name}`);
-        await this.runSetupCommands(name, args);
       }
     }
 
     return mcpServers;
-  }
-
-  /**
-   * Run setup commands for an MCP server if needed (e.g. Playwright browser install).
-   */
-  private async runSetupCommands(serverName: string, args: string[]): Promise<void> {
-    const setupCommands = getMcpSetupCommands(args);
-    if (setupCommands.length === 0) return;
-
-    const { execSync } = await import("child_process");
-    for (const cmd of setupCommands) {
-      try {
-        console.log(`[SkillExecutor] Running setup for ${serverName}: ${cmd}`);
-        execSync(cmd, { stdio: "pipe", timeout: 120_000 });
-      } catch (err) {
-        console.warn(
-          `[SkillExecutor] Setup command failed for ${serverName}: ${cmd}`,
-          err instanceof Error ? err.message : err
-        );
-      }
-    }
   }
 
   /**

@@ -18,8 +18,6 @@ export interface KnownMcpServer {
   optionalEnv?: string[];
   /** Common mistakes to check for */
   envAliases?: Record<string, string>; // wrong name -> correct name
-  /** Shell commands to run before first use (e.g. installing browser binaries) */
-  setupCommands?: string[];
 }
 
 export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
@@ -82,14 +80,6 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
       OP_TOKEN: "OP_SERVICE_ACCOUNT_TOKEN",
       "1PASSWORD_TOKEN": "OP_SERVICE_ACCOUNT_TOKEN",
     },
-  },
-  {
-    package: "@playwright/mcp",
-    displayName: "Playwright Browser",
-    command: "npx",
-    args: ["-y", "@playwright/mcp@latest", "--headless"],
-    requiredEnv: [],
-    setupCommands: ["npx playwright install chromium"],
   },
 ];
 
@@ -181,13 +171,4 @@ export function fixMcpServerEnv(
   }
 
   return fixed;
-}
-
-/**
- * Get setup commands needed for an MCP server (e.g. browser installation for Playwright).
- * Returns empty array if no setup is needed.
- */
-export function getMcpSetupCommands(args: string[]): string[] {
-  const serverType = detectMcpServerType(args);
-  return serverType?.setupCommands ?? [];
 }
