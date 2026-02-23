@@ -1,15 +1,38 @@
 {
-  "name": "@clawback/mcp-server",
+  "name": "clawback-mcp",
   "version": "0.1.0",
+  "description": "MCP server for Clawback - event-driven Claude automation engine",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "clawback-mcp": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/brvtl/clawback.git",
+    "directory": "packages/mcp-server"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "claude",
+    "anthropic",
+    "automation",
+    "model-context-protocol"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "prepublishOnly": "tsc"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
