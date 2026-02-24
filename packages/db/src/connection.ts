@@ -90,6 +90,7 @@ export function createTestConnection(): DatabaseConnection {
       review_status TEXT,
       review_result TEXT,
       model TEXT DEFAULT 'sonnet',
+      system INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

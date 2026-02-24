@@ -57,6 +57,13 @@
       "when": 1771922074619,
       "tag": "0007_foamy_wendell_rand",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1771924805157,
+      "tag": "0008_mysterious_micromax",
+      "breakpoints": true
     }
   ]
 }

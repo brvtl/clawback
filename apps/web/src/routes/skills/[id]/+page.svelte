@@ -170,13 +170,15 @@
         >
           Edit Skill
         </button>
-        <button
-          on:click={deleteSkill}
-          disabled={deleting}
-          class="bg-red-600 hover:bg-red-700 disabled:bg-red-800 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-        >
-          {deleting ? "Deleting..." : "Delete"}
-        </button>
+        {#if !skill.system}
+          <button
+            on:click={deleteSkill}
+            disabled={deleting}
+            class="bg-red-600 hover:bg-red-700 disabled:bg-red-800 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            {deleting ? "Deleting..." : "Delete"}
+          </button>
+        {/if}
       </div>
     </div>
 
@@ -186,7 +188,15 @@
       </div>
     {/if}
 
-    <h1 class="text-3xl font-bold mb-2">{skill.name}</h1>
+    <div class="flex items-center gap-3 mb-2">
+      <h1 class="text-3xl font-bold">{skill.name}</h1>
+      {#if skill.system}
+        <span
+          class="text-xs font-medium px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30"
+          >System</span
+        >
+      {/if}
+    </div>
     {#if skill.description}
       <p class="text-gray-400 mb-4">{skill.description}</p>
     {/if}

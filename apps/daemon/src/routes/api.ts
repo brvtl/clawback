@@ -291,6 +291,13 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
   server.delete<{ Params: { id: string } }>(
     "/api/skills/:id",
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const skill = context.skillRegistry.getSkill(request.params.id);
+      if (!skill) {
+        return reply.status(404).send({ error: "Skill not found" });
+      }
+      if (skill.system) {
+        return reply.status(403).send({ error: "Cannot delete system skills" });
+      }
       const deleted = context.skillRegistry.deleteSkill(request.params.id);
       if (!deleted) {
         return reply.status(404).send({ error: "Skill not found" });

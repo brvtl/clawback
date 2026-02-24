@@ -83,6 +83,7 @@ export const SkillSchema = z.object({
   reviewResult: ReviewResultSchema.optional(),
   // Model selection
   model: SkillModelSchema.default("sonnet"),
+  system: z.boolean().default(false),
 });
 
 export type Skill = z.infer<typeof SkillSchema>;

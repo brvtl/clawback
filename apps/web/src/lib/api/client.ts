@@ -54,6 +54,7 @@ export interface ApiSkill {
   notifications?: { onComplete?: boolean; onError?: boolean };
   knowledge?: string[];
   model?: SkillModel;
+  system?: boolean;
 }
 
 export interface ApiNotification {

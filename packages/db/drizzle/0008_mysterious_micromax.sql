@@ -1,0 +1,1 @@
+ALTER TABLE `skills` ADD `system` integer DEFAULT false NOT NULL;
