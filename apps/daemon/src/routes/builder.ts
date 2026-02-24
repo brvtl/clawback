@@ -33,11 +33,53 @@ interface ChatResponse {
 }
 
 // Convert MCP tool schemas to Anthropic tool format
-const BUILDER_TOOLS: Anthropic.Tool[] = TOOLS.map((tool) => ({
-  name: tool.name,
-  description: tool.description,
-  input_schema: tool.inputSchema as Anthropic.Tool.InputSchema,
-}));
+const BUILDER_TOOLS: Anthropic.Tool[] = [
+  // Built-in fetch tool for reading URLs (API docs, skill definitions, etc.)
+  {
+    name: "fetch_url",
+    description:
+      "Fetch content from a URL. Use this to read API documentation, skill definitions, or any web content the user references.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        url: {
+          type: "string",
+          description: "The URL to fetch",
+        },
+      },
+      required: ["url"],
+    },
+  },
+  // Clawback MCP tools
+  ...TOOLS.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.inputSchema as Anthropic.Tool.InputSchema,
+  })),
+];
+
+async function handleBuilderToolCall(
+  name: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  if (name === "fetch_url") {
+    const url = args.url as string;
+    const response = await fetch(url, {
+      headers: { Accept: "text/plain, text/markdown, application/json, text/html" },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    const text = await response.text();
+    // Truncate very large responses to avoid blowing up context
+    const maxLen = 30_000;
+    if (text.length > maxLen) {
+      return text.slice(0, maxLen) + `\n\n... (truncated, ${text.length} total characters)`;
+    }
+    return text;
+  }
+  return handleToolCall(name, args);
+}
 
 const BUILDER_SYSTEM_PROMPT = `You are a helpful assistant for Clawback, an event-driven automation engine powered by Claude.
 
@@ -47,7 +89,10 @@ Help users create automated workflows and skills that respond to events from ANY
 
 ## Tools Available
 
-You have access to the Clawback MCP server with these tools:
+You have access to the following tools:
+
+### Web Access
+- **fetch_url**: Fetch content from any URL — use this to read API docs, skill definitions, or platform references the user provides
 
 ### Skills & Execution
 - **list_skills**: See all configured skills
@@ -326,7 +371,7 @@ Use the Clawback tools to query the system and help the user. When creating auto
 
             for (const toolUse of toolUseBlocks) {
               try {
-                const result = await handleToolCall(
+                const result = await handleBuilderToolCall(
                   toolUse.name,
                   toolUse.input as Record<string, unknown>
                 );
