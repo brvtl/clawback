@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { mcpServers, type DbMcpServer } from "../schema.js";
 import type { DatabaseConnection } from "../connection.js";
 import { encryptEnv, decryptEnv } from "../crypto.js";
+import { KNOWN_MCP_SERVERS } from "@clawback/shared";
 
 export interface McpServerConfig {
   command: string;
@@ -130,6 +131,26 @@ export class McpServerRepository {
   delete(id: string): boolean {
     const result = this.db.delete(mcpServers).where(eq(mcpServers.id, id)).run();
     return result.changes > 0;
+  }
+
+  /**
+   * Seed known MCP servers from the registry if they don't already exist.
+   * Called at startup so common servers are always visible in settings.
+   */
+  seedKnownServers(): void {
+    for (const known of KNOWN_MCP_SERVERS) {
+      // Use the display name lowercased as the server name (e.g., "GitHub" -> "github")
+      const name = known.displayName.toLowerCase().replace(/\s+/g, "-");
+      const existing = this.findByName(name);
+      if (!existing) {
+        this.create({
+          name,
+          description: `${known.displayName} integration`,
+          command: known.command,
+          args: known.args,
+        });
+      }
+    }
   }
 
   /**

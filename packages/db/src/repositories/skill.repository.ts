@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { skills, type DbSkill } from "../schema.js";
+import { skills, scheduledJobs, type DbSkill } from "../schema.js";
 import type { DatabaseConnection } from "../connection.js";
 import type {
   Skill,
@@ -173,6 +173,8 @@ export class SkillRepository {
   }
 
   delete(id: string): boolean {
+    // Remove scheduled jobs referencing this skill to avoid FK constraint failure
+    this.db.delete(scheduledJobs).where(eq(scheduledJobs.skillId, id)).run();
     const result = this.db.delete(skills).where(eq(skills.id, id)).run();
     return result.changes > 0;
   }
