@@ -236,6 +236,141 @@ describe("SkillExecutor", () => {
     });
   });
 
+  describe("model selection", () => {
+    it("should use correct model ID for haiku", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: "text", text: "Hello" }],
+        stop_reason: "end_turn",
+      });
+
+      const run = {
+        id: "run_1",
+        eventId: "e1",
+        skillId: "s1",
+        status: "running" as const,
+        input: "{}",
+        output: null,
+        error: null,
+        toolCalls: "[]",
+        startedAt: null,
+        completedAt: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      await executor.runAgentLoop({ ...testSkill, model: "haiku", mcpServers: {} }, testEvent, run);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      expect(mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0].model).toBe(
+        "claude-haiku-4-5-20251001"
+      );
+    });
+
+    it("should use correct model ID for sonnet", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: "text", text: "Hello" }],
+        stop_reason: "end_turn",
+      });
+
+      const run = {
+        id: "run_1",
+        eventId: "e1",
+        skillId: "s1",
+        status: "running" as const,
+        input: "{}",
+        output: null,
+        error: null,
+        toolCalls: "[]",
+        startedAt: null,
+        completedAt: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      await executor.runAgentLoop(
+        { ...testSkill, model: "sonnet", mcpServers: {} },
+        testEvent,
+        run
+      );
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      expect(mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0].model).toBe(
+        "claude-sonnet-4-20250514"
+      );
+    });
+
+    it("should use correct model ID for opus", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: "text", text: "Hello" }],
+        stop_reason: "end_turn",
+      });
+
+      const run = {
+        id: "run_1",
+        eventId: "e1",
+        skillId: "s1",
+        status: "running" as const,
+        input: "{}",
+        output: null,
+        error: null,
+        toolCalls: "[]",
+        startedAt: null,
+        completedAt: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      await executor.runAgentLoop({ ...testSkill, model: "opus", mcpServers: {} }, testEvent, run);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      expect(mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0].model).toBe(
+        "claude-opus-4-20250514"
+      );
+    });
+
+    it("should default to sonnet when no model specified", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: "text", text: "Hello" }],
+        stop_reason: "end_turn",
+      });
+
+      const run = {
+        id: "run_1",
+        eventId: "e1",
+        skillId: "s1",
+        status: "running" as const,
+        input: "{}",
+        output: null,
+        error: null,
+        toolCalls: "[]",
+        startedAt: null,
+        completedAt: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      // testSkill doesn't have model set, so it should default to sonnet
+      await executor.runAgentLoop({ ...testSkill, mcpServers: {} }, testEvent, run);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      expect(mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0].model).toBe(
+        "claude-sonnet-4-20250514"
+      );
+    });
+  });
+
   describe("buildSystemPrompt", () => {
     it("should include skill instructions", () => {
       const prompt = executor.buildSystemPrompt(testSkill, testEvent);
