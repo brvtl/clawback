@@ -95,7 +95,7 @@ Return a structured analysis:
 - No env needed
 
 ### Fetch (URL Reading)
-- Command: npx, Args: ["-y", "@modelcontextprotocol/server-fetch"]
+- Command: uvx, Args: ["mcp-server-fetch"]
 - No env needed
 
 ### Postgres
@@ -107,6 +107,19 @@ Return a structured analysis:
 2. Determine the right package and configuration
 3. Use \${VAR} placeholder syntax for secrets (e.g., \${GITHUB_PERSONAL_ACCESS_TOKEN})
 4. Create the server with create_mcp_server
+
+## Credential Handling — CRITICAL
+- API tokens, keys, and secrets MUST be configured as env vars on the MCP server using \${VAR} placeholder syntax
+- NEVER instruct skills to store credentials on the filesystem or fetch/manage tokens themselves
+- The MCP server env vars ARE the credential store — skills just call the MCP server's tools
+- Example: If an API needs a bearer token, set AUTH_BEARER: "\${MY_API_TOKEN}" on the MCP server
+- Example: If a user provides a token, create/update the MCP server with that token in its env vars
+- If a user needs to register for an API key, tell them to get the key and then configure it as an MCP server env var
+
+## Updating MCP Servers
+- update_mcp_server MERGES env vars — you only need to send the keys you want to add or change
+- Existing env vars (like REST_BASE_URL) are preserved when you update with new keys (like AUTH_BEARER)
+- Example: to add auth to an existing server, just send {env: {AUTH_BEARER: "token"}} — REST_BASE_URL stays intact
 
 ## Important
 - Env var names must match what the MCP server package expects exactly
@@ -161,6 +174,16 @@ Return a structured analysis:
 2. Use list_mcp_servers to verify needed MCP servers exist
 3. Create the skill with create_skill
 4. Return the created skill ID
+
+## Credential Handling — CRITICAL
+- Skill instructions must NEVER tell Claude to store API keys, tokens, or secrets on the filesystem or in SQLite
+- Credentials are handled by MCP server env vars, NOT by skills
+- Registration/auth skills should call the API and return the credential in their JSON output — nothing else
+- Skills that need authenticated API access just use the MCP server tools — auth is already in the env vars
+- WRONG: "Store the API key in /tmp/api_key.txt" or "Save the key to SQLite"
+- WRONG: "Retrieve stored credentials from the database before making requests"
+- RIGHT: Registration skill returns {"api_key": "..."} in output, MCP server gets updated separately
+- RIGHT: "Use the MCP server tools to call the API" (the MCP server has AUTH_BEARER configured)
 
 IMPORTANT: Skills reference MCP servers by name (e.g., ["github"]), not by full config. The MCP servers must exist in the system.`,
     mcpServers: ["clawback"],
@@ -291,6 +314,34 @@ GitHub, Slack, Email (IMAP/SMTP), Filesystem, PostgreSQL, HTTP/REST APIs, Playwr
 5. **Create**: MCP servers → skills → workflow (in order)
 6. **Explain**: Tell them how to configure webhooks/triggers
 7. **Complete**: Call complete_workflow with a summary
+
+## Credential & State Flow — CRITICAL
+
+Skills DO NOT share state. Each runs independently. The only persistent credential store is MCP server env vars.
+
+### When an integration requires authentication:
+1. Create the MCP server first (e.g., with REST_BASE_URL only)
+2. Create a registration/auth skill that calls the API and **returns the credential in its output**
+3. **YOU (the orchestrator) must then spawn "Builder: Create MCP Server"** to update that MCP server's env vars with the returned credential (e.g., set AUTH_BEARER to the API key value)
+4. Only AFTER the MCP server has credentials configured, create the remaining skills that depend on authenticated API access
+
+### This is mandatory because:
+- Cron workflows run repeatedly — credentials must persist in the MCP server config
+- Skills cannot pass state to each other — only the MCP server env vars persist between runs
+- The dkmaker-mcp-rest-api server reads AUTH_BEARER, AUTH_APIKEY_VALUE, etc. from its env vars at startup
+
+### NEVER do any of these:
+- Create skills that store credentials on the filesystem or in SQLite
+- Create skills that reference a "sqlite" MCP server for credential storage
+- Assume the MCP server "already has auth configured" unless you explicitly configured it
+- Create authenticated skills before the MCP server has credentials set
+
+### Correct sequence for API integrations:
+1. Spawn "Builder: Create MCP Server" → create server with base URL
+2. Spawn "Builder: Create Skill" → create registration skill (returns credential)
+3. **Spawn "Builder: Create Skill" → create a small utility skill that takes an API key as input and calls update_mcp_server to add the auth env var** (update_mcp_server merges env — existing keys like REST_BASE_URL are preserved)
+4. Spawn "Builder: Create Skill" → create remaining skills that use the authenticated MCP server
+5. Spawn "Builder: Create Workflow" → wire it all together
 
 ## Important Notes
 - When passing tasks to builder skills, include ALL relevant context in the "task" input field — the skill has no memory of your conversation.

@@ -35,10 +35,11 @@ FROM node:24-alpine AS production
 
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
-# Install nginx + chromium (for Playwright MCP server)
+# Install nginx + chromium (for Playwright MCP server) + uv (for Python MCP servers)
 RUN apk add --no-cache nginx chromium nss freetype harfbuzz ca-certificates ttf-freefont \
     && mkdir -p /opt/google/chrome \
-    && ln -s /usr/bin/chromium-browser /opt/google/chrome/chrome
+    && ln -s /usr/bin/chromium-browser /opt/google/chrome/chrome \
+    && wget -qO- https://astral.sh/uv/install.sh | sh
 
 WORKDIR /app
 
@@ -80,6 +81,7 @@ RUN chmod +x docker-entrypoint.sh
 RUN mkdir -p /data /skills
 
 # Environment variables
+ENV PATH="/root/.local/bin:$PATH"
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0

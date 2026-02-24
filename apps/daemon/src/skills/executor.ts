@@ -31,7 +31,7 @@ const REMOTE_SKILL_PERMISSIONS: SharedToolPermissions = {
 const MODEL_IDS: Record<SkillModel, string> = {
   opus: "claude-opus-4-20250514",
   sonnet: "claude-sonnet-4-20250514",
-  haiku: "claude-haiku-4-20250514",
+  haiku: "claude-haiku-4-5-20251001",
 };
 
 // Retry Anthropic API calls on rate limit (429) with exponential backoff

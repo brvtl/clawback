@@ -272,6 +272,7 @@ export class BuilderExecutor {
                 reason,
               });
 
+              let skillEventId: string | null = null;
               try {
                 // Create synthetic event for the skill
                 const skillEvent = await this.eventRepo.create({
@@ -284,9 +285,15 @@ export class BuilderExecutor {
                   },
                   metadata: { triggeredBy: "builder_orchestrator" },
                 });
+                skillEventId = skillEvent.id;
 
                 // Execute via SkillExecutor (connects to MCP servers, runs tool loop)
+                await this.eventRepo.updateStatus(skillEvent.id, "processing");
                 const run = await this.skillExecutor.execute(skill, skillEvent);
+                await this.eventRepo.updateStatus(
+                  skillEvent.id,
+                  run.status === "completed" ? "completed" : "failed"
+                );
 
                 // Track in workflow run
                 this.workflowRepo.addSkillRun(workflowRunId, run.id);
@@ -319,6 +326,9 @@ export class BuilderExecutor {
                   result: resultStr.length > 2000 ? resultStr.slice(0, 2000) + "..." : resultStr,
                 });
               } catch (error) {
+                if (skillEventId) {
+                  await this.eventRepo.updateStatus(skillEventId, "failed");
+                }
                 const errMsg = error instanceof Error ? error.message : "Skill execution failed";
                 toolResults.push({
                   type: "tool_result",

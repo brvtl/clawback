@@ -149,6 +149,12 @@ export class McpServerRepository {
           command: known.command,
           args: known.args,
         });
+      } else {
+        // Update command/args if the registry changed
+        this.update(existing.id, {
+          command: known.command,
+          args: known.args,
+        });
       }
     }
   }

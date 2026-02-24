@@ -132,9 +132,18 @@ function createBuilderStore() {
         if (typeof localStorage !== "undefined") {
           localStorage.setItem(STORAGE_KEY, session.id);
         }
-      } catch (e) {
-        const error = e instanceof Error ? e.message : "Failed to load session";
-        update((state) => ({ ...state, loading: false, error }));
+      } catch {
+        // Session no longer exists — clear stale ID and start fresh
+        if (typeof localStorage !== "undefined") {
+          localStorage.removeItem(STORAGE_KEY);
+        }
+        set({
+          sessionId: null,
+          messages: [],
+          loading: false,
+          currentToolCall: null,
+          error: null,
+        });
       }
     },
 

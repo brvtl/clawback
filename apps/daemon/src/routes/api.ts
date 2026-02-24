@@ -480,8 +480,8 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         args = body.args ?? existing.args;
       }
 
-      // Validate and auto-fix env vars for known MCP server types
-      let env = body.env;
+      // Merge env vars with existing (partial updates don't wipe unrelated keys)
+      let env = body.env ? { ...existing.env, ...body.env } : undefined;
       let warnings: string[] = [];
       if (env) {
         const validation = validateMcpServerEnv(args, env);

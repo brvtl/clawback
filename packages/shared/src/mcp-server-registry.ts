@@ -77,10 +77,10 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
     requiredEnv: [],
   },
   {
-    package: "@modelcontextprotocol/server-fetch",
+    package: "mcp-server-fetch",
     displayName: "Fetch",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-fetch"],
+    command: "uvx",
+    args: ["mcp-server-fetch"],
     requiredEnv: [],
   },
   {
