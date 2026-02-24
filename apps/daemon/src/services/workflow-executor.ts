@@ -8,7 +8,7 @@ import type {
   CheckpointRepository,
   HitlRequestRepository,
 } from "@clawback/db";
-import type { SkillExecutor } from "../skills/executor.js";
+import { callWithRetry, type SkillExecutor } from "../skills/executor.js";
 import type { NotificationService } from "./notifications.js";
 
 export interface WorkflowExecutorDependencies {
@@ -250,13 +250,18 @@ export class WorkflowExecutor {
     );
 
     while (continueLoop) {
-      const response = await this.anthropic.messages.create({
-        model,
-        max_tokens: 4096,
-        system: systemPrompt,
-        tools: ORCHESTRATOR_TOOLS,
-        messages,
-      });
+      const response: Anthropic.Message = await callWithRetry(
+        () =>
+          this.anthropic!.messages.create({
+            model,
+            max_tokens: 4096,
+            system: systemPrompt,
+            tools: ORCHESTRATOR_TOOLS,
+            messages,
+          }),
+        3,
+        `workflow "${workflow.name}" orchestrator`
+      );
 
       // Check for tool use
       const toolUseBlocks = response.content.filter(

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import Anthropic from "@anthropic-ai/sdk";
 import { TOOLS, handleToolCall } from "clawback-mcp/tools";
+import { callWithRetry } from "../skills/executor.js";
 import type { ServerContext } from "../server.js";
 
 interface BuilderAction {
@@ -294,13 +295,18 @@ Use the Clawback tools to query the system and help the user. When creating auto
         let continueLoop = true;
 
         while (continueLoop) {
-          const response = await anthropic.messages.create({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 4096,
-            system: BUILDER_SYSTEM_PROMPT,
-            tools: BUILDER_TOOLS,
-            messages,
-          });
+          const response: Anthropic.Message = await callWithRetry(
+            () =>
+              anthropic.messages.create({
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 4096,
+                system: BUILDER_SYSTEM_PROMPT,
+                tools: BUILDER_TOOLS,
+                messages,
+              }),
+            3,
+            "builder chat"
+          );
 
           // Extract text from response
           const textBlocks = response.content.filter(

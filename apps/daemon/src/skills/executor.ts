@@ -34,6 +34,33 @@ const MODEL_IDS: Record<SkillModel, string> = {
   haiku: "claude-haiku-4-20250514",
 };
 
+// Retry Anthropic API calls on rate limit (429) with exponential backoff
+export async function callWithRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  label = "API call"
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const isRateLimit =
+        err instanceof Anthropic.RateLimitError ||
+        (err instanceof Error && err.message.includes("429"));
+      if (!isRateLimit || attempt === maxRetries) {
+        throw err;
+      }
+      // Parse retry-after header if available, otherwise exponential backoff
+      const waitMs = Math.min(15_000 * 2 ** attempt, 120_000);
+      console.log(
+        `[Retry] ${label} rate limited (attempt ${attempt + 1}/${maxRetries}), waiting ${Math.round(waitMs / 1000)}s...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw new Error("Unreachable");
+}
+
 export interface ExecutorDependencies {
   runRepo: RunRepository;
   notifRepo: NotificationRepository;
@@ -349,12 +376,17 @@ ${JSON.stringify(eventPayload, null, 2)}
       let cpSequence = 0;
 
       while (continueLoop) {
-        const response = await anthropic.messages.create({
-          model: modelId,
-          max_tokens: 4096,
-          tools: allTools.length > 0 ? allTools : undefined,
-          messages,
-        });
+        const response: Anthropic.Message = await callWithRetry(
+          () =>
+            anthropic.messages.create({
+              model: modelId,
+              max_tokens: 4096,
+              tools: allTools.length > 0 ? allTools : undefined,
+              messages,
+            }),
+          3,
+          `skill "${skill.name}"`
+        );
 
         // Process text blocks
         const textBlocks = response.content.filter(
