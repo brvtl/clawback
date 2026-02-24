@@ -105,6 +105,7 @@ export const workflows = sqliteTable("workflows", {
     .notNull()
     .default("opus"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  system: integer("system", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });

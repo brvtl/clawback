@@ -1,0 +1,1 @@
+ALTER TABLE `workflows` ADD `system` integer DEFAULT false NOT NULL;

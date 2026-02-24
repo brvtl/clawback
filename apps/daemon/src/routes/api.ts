@@ -741,6 +741,13 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
   server.delete<{ Params: { id: string } }>(
     "/api/workflows/:id",
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const workflow = context.workflowRegistry.getWorkflow(request.params.id);
+      if (!workflow) {
+        return reply.status(404).send({ error: "Workflow not found" });
+      }
+      if (workflow.system) {
+        return reply.status(403).send({ error: "Cannot delete system workflows" });
+      }
       const deleted = context.workflowRegistry.deleteWorkflow(request.params.id);
       if (!deleted) {
         return reply.status(404).send({ error: "Workflow not found" });

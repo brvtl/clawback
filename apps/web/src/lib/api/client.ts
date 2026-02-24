@@ -93,6 +93,7 @@ export interface ApiWorkflow {
   skills: string[];
   orchestratorModel: "opus" | "sonnet";
   enabled: boolean;
+  system?: boolean;
   createdAt?: number;
   updatedAt?: number;
 }

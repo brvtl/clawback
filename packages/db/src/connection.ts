@@ -142,6 +142,7 @@ export function createTestConnection(): DatabaseConnection {
       skills TEXT NOT NULL,
       orchestrator_model TEXT NOT NULL DEFAULT 'opus',
       enabled INTEGER NOT NULL DEFAULT 1,
+      system INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

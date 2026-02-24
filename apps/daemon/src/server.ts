@@ -121,6 +121,18 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   });
 
+  // Bootstrap system builder workflow (before registry load so it's cached)
+  let builderWorkflow = workflowRepo.findSystem("AI Builder");
+  if (!builderWorkflow) {
+    builderWorkflow = workflowRepo.createSystem({
+      name: "AI Builder",
+      description:
+        "System workflow for the AI builder chat. Creates skills, workflows, and MCP servers via conversation.",
+      instructions: "Internal builder system prompt",
+    });
+    console.log(`[Server] Created system builder workflow: ${builderWorkflow.id}`);
+  }
+
   // Initialize workflow registry
   const workflowRegistry = new WorkflowRegistry(workflowRepo);
   workflowRegistry.loadWorkflows();
@@ -149,6 +161,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     builderSessionRepo,
     notificationService,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    workflowRepo,
+    checkpointRepo,
+    eventRepo,
+    builderWorkflowId: builderWorkflow.id,
   });
 
   // Initialize event queue

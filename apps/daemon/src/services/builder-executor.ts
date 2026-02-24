@@ -1,6 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { TOOLS, handleToolCall } from "clawback-mcp/tools";
-import type { BuilderSessionRepository } from "@clawback/db";
+import type {
+  BuilderSessionRepository,
+  WorkflowRepository,
+  CheckpointRepository,
+  EventRepository,
+} from "@clawback/db";
 import { callWithRetry } from "../skills/executor.js";
 import type { NotificationService } from "./notifications.js";
 
@@ -8,6 +13,10 @@ export interface BuilderExecutorDependencies {
   builderSessionRepo: BuilderSessionRepository;
   notificationService: NotificationService;
   anthropicApiKey?: string;
+  workflowRepo: WorkflowRepository;
+  checkpointRepo: CheckpointRepository;
+  eventRepo: EventRepository;
+  builderWorkflowId: string;
 }
 
 // Convert MCP tool schemas to Anthropic tool format
@@ -290,11 +299,19 @@ export class BuilderExecutor {
   private anthropic: Anthropic | null = null;
   private builderSessionRepo: BuilderSessionRepository;
   private notificationService: NotificationService;
+  private workflowRepo: WorkflowRepository;
+  private checkpointRepo: CheckpointRepository;
+  private eventRepo: EventRepository;
+  private builderWorkflowId: string;
   private activeSessions = new Set<string>();
 
   constructor(deps: BuilderExecutorDependencies) {
     this.builderSessionRepo = deps.builderSessionRepo;
     this.notificationService = deps.notificationService;
+    this.workflowRepo = deps.workflowRepo;
+    this.checkpointRepo = deps.checkpointRepo;
+    this.eventRepo = deps.eventRepo;
+    this.builderWorkflowId = deps.builderWorkflowId;
 
     if (deps.anthropicApiKey) {
       this.anthropic = new Anthropic({ apiKey: deps.anthropicApiKey });
@@ -330,7 +347,7 @@ export class BuilderExecutor {
     this.builderSessionRepo.updateMessages(sessionId, existingMessages);
 
     // Fire and forget
-    void this.runLoop(sessionId, existingMessages).catch((error) => {
+    void this.runLoop(sessionId, existingMessages, userMessage).catch((error) => {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       console.error(`[BuilderExecutor] Session ${sessionId} error:`, errorMessage);
       this.builderSessionRepo.updateStatus(sessionId, "error", errorMessage);
@@ -339,13 +356,34 @@ export class BuilderExecutor {
     });
   }
 
-  private async runLoop(sessionId: string, messages: Anthropic.MessageParam[]): Promise<void> {
+  private async runLoop(
+    sessionId: string,
+    messages: Anthropic.MessageParam[],
+    userMessage: string
+  ): Promise<void> {
     if (!this.anthropic) {
       throw new Error("ANTHROPIC_API_KEY is required for builder");
     }
 
+    // Create event + workflow run for observability
+    const event = await this.eventRepo.create({
+      source: "builder",
+      type: "chat.message",
+      payload: { sessionId, message: userMessage },
+      metadata: { sessionId },
+    });
+
+    const workflowRun = this.workflowRepo.createRun({
+      workflowId: this.builderWorkflowId,
+      eventId: event.id,
+      input: { sessionId, message: userMessage },
+    });
+    const workflowRunId = workflowRun.id;
+    this.workflowRepo.updateRunStatus(workflowRunId, "running");
+
     let continueLoop = true;
     let finalText = "";
+    let cpSequence = this.checkpointRepo.getNextSequence(undefined, workflowRunId);
 
     try {
       while (continueLoop) {
@@ -370,6 +408,7 @@ export class BuilderExecutor {
           const text = textBlocks.map((b) => b.text).join("\n");
           finalText += text;
           this.broadcast(sessionId, "builder_text", { text });
+          this.saveCheckpoint(workflowRunId, cpSequence++, "assistant_message", { text });
         }
 
         // Check for tool use
@@ -384,6 +423,11 @@ export class BuilderExecutor {
             this.broadcast(sessionId, "builder_tool_call", {
               tool: toolUse.name,
               args: toolUse.input,
+            });
+            this.saveCheckpoint(workflowRunId, cpSequence++, "tool_call", {
+              toolName: toolUse.name,
+              toolInput: toolUse.input,
+              toolUseId: toolUse.id,
             });
 
             try {
@@ -403,6 +447,11 @@ export class BuilderExecutor {
                 tool: toolUse.name,
                 result: resultStr.length > 500 ? resultStr.slice(0, 500) + "..." : resultStr,
               });
+              this.saveCheckpoint(workflowRunId, cpSequence++, "tool_result", {
+                toolName: toolUse.name,
+                toolUseId: toolUse.id,
+                result: resultStr.length > 2000 ? resultStr.slice(0, 2000) + "..." : resultStr,
+              });
             } catch (error) {
               const errMsg = error instanceof Error ? error.message : "Unknown error";
               toolResults.push({
@@ -414,6 +463,12 @@ export class BuilderExecutor {
 
               this.broadcast(sessionId, "builder_tool_result", {
                 tool: toolUse.name,
+                result: `Error: ${errMsg}`,
+                isError: true,
+              });
+              this.saveCheckpoint(workflowRunId, cpSequence++, "tool_result", {
+                toolName: toolUse.name,
+                toolUseId: toolUse.id,
                 result: `Error: ${errMsg}`,
                 isError: true,
               });
@@ -453,9 +508,42 @@ export class BuilderExecutor {
       }
 
       this.broadcast(sessionId, "builder_complete", { finalText });
+      this.workflowRepo.updateRunStatus(workflowRunId, "completed", {
+        output: { summary: finalText },
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      this.saveCheckpoint(workflowRunId, cpSequence++, "error", { error: errorMessage });
+      this.workflowRepo.updateRunStatus(workflowRunId, "failed", { error: errorMessage });
+      throw error;
     } finally {
       this.activeSessions.delete(sessionId);
     }
+  }
+
+  private saveCheckpoint(
+    workflowRunId: string,
+    sequence: number,
+    type: "assistant_message" | "tool_call" | "tool_result" | "error",
+    data: unknown
+  ): void {
+    const checkpoint = this.checkpointRepo.create({
+      workflowRunId,
+      sequence,
+      type,
+      data,
+    });
+    this.notificationService.broadcastMessage({
+      type: "checkpoint",
+      workflowRunId,
+      checkpoint: {
+        id: checkpoint.id,
+        sequence,
+        type: checkpoint.type,
+        data,
+        createdAt: checkpoint.createdAt,
+      },
+    });
   }
 
   private broadcast(sessionId: string, type: string, data: Record<string, unknown>): void {
