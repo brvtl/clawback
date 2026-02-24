@@ -3,6 +3,8 @@ import {
   workflows,
   workflowRuns,
   scheduledJobs,
+  checkpoints,
+  hitlRequests,
   type DbWorkflow,
   type WorkflowRun as DbWorkflowRun,
 } from "../schema.js";
@@ -174,9 +176,14 @@ export class WorkflowRepository {
     if (!existing) return false;
     if (existing.system) return false;
 
-    // Remove scheduled jobs and workflow runs referencing this workflow to avoid FK constraint failure
-    this.db.delete(scheduledJobs).where(eq(scheduledJobs.workflowId, id)).run();
+    // Cascade delete: checkpoints/hitl -> workflow_runs -> scheduled_jobs -> workflow
+    const runs = this.db.select().from(workflowRuns).where(eq(workflowRuns.workflowId, id)).all();
+    for (const run of runs) {
+      this.db.delete(hitlRequests).where(eq(hitlRequests.workflowRunId, run.id)).run();
+      this.db.delete(checkpoints).where(eq(checkpoints.workflowRunId, run.id)).run();
+    }
     this.db.delete(workflowRuns).where(eq(workflowRuns.workflowId, id)).run();
+    this.db.delete(scheduledJobs).where(eq(scheduledJobs.workflowId, id)).run();
     const result = this.db.delete(workflows).where(eq(workflows.id, id)).run();
     return result.changes > 0;
   }
