@@ -470,6 +470,40 @@ class ApiClient {
       }
     );
   }
+  // Builder session methods
+  async sendBuilderMessage(message: string, sessionId?: string): Promise<{ sessionId: string }> {
+    return this.fetch<{ sessionId: string }>("/api/builder/chat", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, message }),
+    });
+  }
+
+  async getBuilderSessions(): Promise<{
+    sessions: Array<{
+      id: string;
+      status: string;
+      title: string | null;
+      lastError: string | null;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  }> {
+    return this.fetch("/api/builder/sessions");
+  }
+
+  async getBuilderSession(id: string): Promise<{
+    session: {
+      id: string;
+      status: string;
+      title: string | null;
+      lastError: string | null;
+      createdAt: number;
+      updatedAt: number;
+    };
+    messages: unknown[];
+  }> {
+    return this.fetch(`/api/builder/sessions/${id}`);
+  }
 }
 
 export const api = new ApiClient();

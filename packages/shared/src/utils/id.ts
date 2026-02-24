@@ -44,3 +44,7 @@ export function generateCheckpointId(): string {
 export function generateHitlRequestId(): string {
   return generateId("hitl");
 }
+
+export function generateBuilderSessionId(): string {
+  return generateId("bsess");
+}

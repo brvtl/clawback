@@ -13,6 +13,7 @@ import {
   WorkflowRepository,
   CheckpointRepository,
   HitlRequestRepository,
+  BuilderSessionRepository,
 } from "@clawback/db";
 import { SkillRegistry } from "./skills/registry.js";
 import { SkillExecutor } from "./skills/executor.js";
@@ -22,6 +23,7 @@ import { SchedulerService } from "./services/scheduler.js";
 import { RemoteSkillFetcher } from "./services/remote-skill-fetcher.js";
 import { SkillReviewer } from "./services/skill-reviewer.js";
 import { WorkflowExecutor } from "./services/workflow-executor.js";
+import { BuilderExecutor } from "./services/builder-executor.js";
 import { WorkflowRegistry } from "./workflows/registry.js";
 import { registerWebhookRoutes } from "./routes/webhook.js";
 import { registerApiRoutes } from "./routes/api.js";
@@ -46,6 +48,8 @@ export interface ServerContext {
   skillReviewer: SkillReviewer;
   workflowRegistry: WorkflowRegistry;
   workflowExecutor: WorkflowExecutor;
+  builderSessionRepo: BuilderSessionRepository;
+  builderExecutor: BuilderExecutor;
 }
 
 export interface CreateServerOptions extends FastifyServerOptions {
@@ -72,6 +76,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const notifRepo = new NotificationRepository(db);
   const skillRepo = new SkillRepository(db);
   const mcpServerRepo = new McpServerRepository(db);
+  mcpServerRepo.seedKnownServers();
   const scheduledJobRepo = new ScheduledJobRepository(db);
   const workflowRepo = new WorkflowRepository(db);
   const checkpointRepo = new CheckpointRepository(db);
@@ -129,6 +134,19 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skillExecutor,
     checkpointRepo,
     hitlRequestRepo,
+    notificationService,
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  });
+
+  // Initialize builder session support
+  const builderSessionRepo = new BuilderSessionRepository(db);
+  const staleReset = builderSessionRepo.resetStale();
+  if (staleReset > 0) {
+    console.log(`[Server] Reset ${staleReset} stale builder session(s) to active`);
+  }
+
+  const builderExecutor = new BuilderExecutor({
+    builderSessionRepo,
     notificationService,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   });
@@ -352,6 +370,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skillReviewer,
     workflowRegistry,
     workflowExecutor,
+    builderSessionRepo,
+    builderExecutor,
   };
 
   // Decorate fastify with context

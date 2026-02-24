@@ -177,6 +177,19 @@ export const hitlRequests = sqliteTable("hitl_requests", {
   respondedAt: integer("responded_at", { mode: "number" }),
 });
 
+// Builder Sessions table - persistent AI builder chat sessions
+export const builderSessions = sqliteTable("builder_sessions", {
+  id: text("id").primaryKey(),
+  status: text("status", { enum: ["active", "processing", "completed", "error"] })
+    .notNull()
+    .default("active"),
+  messages: text("messages").notNull().default("[]"), // JSON: Anthropic.MessageParam[]
+  title: text("title"),
+  lastError: text("last_error"),
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
 // Notifications table - user notifications
 export const notifications = sqliteTable("notifications", {
   id: text("id").primaryKey(),
@@ -221,3 +234,6 @@ export type NewCheckpoint = typeof checkpoints.$inferInsert;
 
 export type HitlRequest = typeof hitlRequests.$inferSelect;
 export type NewHitlRequest = typeof hitlRequests.$inferInsert;
+
+export type BuilderSession = typeof builderSessions.$inferSelect;
+export type NewBuilderSession = typeof builderSessions.$inferInsert;
