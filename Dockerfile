@@ -10,6 +10,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/db/package.json ./packages/db/
+COPY packages/mcp-server/package.json ./packages/mcp-server/
 COPY apps/daemon/package.json ./apps/daemon/
 COPY apps/web/package.json ./apps/web/
 
@@ -25,6 +26,7 @@ COPY apps/web/ ./apps/web/
 # Build all packages (shared must build before daemon and web)
 RUN pnpm --filter @clawback/shared build && \
     pnpm --filter @clawback/db build && \
+    pnpm --filter clawback-mcp build && \
     pnpm --filter @clawback/daemon exec tsc --noCheck && \
     VITE_API_URL="" pnpm --filter @clawback/web build
 
@@ -33,8 +35,10 @@ FROM node:24-alpine AS production
 
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
-# Install nginx
-RUN apk add --no-cache nginx
+# Install nginx + chromium (for Playwright MCP server)
+RUN apk add --no-cache nginx chromium nss freetype harfbuzz ca-certificates ttf-freefont \
+    && mkdir -p /opt/google/chrome \
+    && ln -s /usr/bin/chromium-browser /opt/google/chrome/chrome
 
 WORKDIR /app
 
@@ -42,6 +46,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/db/package.json ./packages/db/
+COPY packages/mcp-server/package.json ./packages/mcp-server/
 COPY apps/daemon/package.json ./apps/daemon/
 COPY apps/web/package.json ./apps/web/
 
@@ -55,6 +60,7 @@ COPY --from=builder /app/node_modules/.pnpm/better-sqlite3@12.6.2/node_modules/b
 # Copy built files — daemon
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/packages/mcp-server/dist ./packages/mcp-server/dist
 COPY --from=builder /app/apps/daemon/dist ./apps/daemon/dist
 
 # Copy built files — web (adapter-node output)

@@ -1,10 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import Anthropic from "@anthropic-ai/sdk";
+import { TOOLS, handleToolCall } from "clawback-mcp/tools";
 import type { ServerContext } from "../server.js";
-import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 interface BuilderAction {
   type:
@@ -33,6 +30,13 @@ interface ChatResponse {
   response: string;
   actions: BuilderAction[] | undefined;
 }
+
+// Convert MCP tool schemas to Anthropic tool format
+const BUILDER_TOOLS: Anthropic.Tool[] = TOOLS.map((tool) => ({
+  name: tool.name,
+  description: tool.description,
+  input_schema: tool.inputSchema as Anthropic.Tool.InputSchema,
+}));
 
 const BUILDER_SYSTEM_PROMPT = `You are a helpful assistant for Clawback, an event-driven automation engine powered by Claude.
 
@@ -87,6 +91,8 @@ Use these tools to understand the current state and make changes!
 - An AI orchestrator (Opus or Sonnet) decides which skills to run and in what order
 - Good for complex processes that need decision-making and coordination
 - Example: "When a new issue is labeled 'customer', extract info, create CRM contact, notify sales, and update the issue"
+
+**Decision rule**: If the user's request involves 2+ distinct steps, uses multiple tools/integrations, or requires decision-making between actions, CREATE A WORKFLOW. Only use a standalone skill for truly single-purpose tasks.
 
 ### Skills
 A skill defines WHAT to do when an event occurs:
@@ -249,9 +255,10 @@ If no MCP servers are configured, tell the user clearly: "No MCP servers are con
 3. **Understand**: "What would you like to automate?"
 4. **Clarify**: Ask about triggers, actions, and specifics
 5. **Collect**: Ask for any missing credentials
-6. **Create**: Use create_skill and create_mcp_server tools to set things up
-7. **Explain**: Tell them how to configure webhooks
-8. **Verify**: Suggest how to test the integration`;
+6. **Decide**: Choose between a skill (single task) or workflow (multi-step coordination). Default to WORKFLOW if the automation involves multiple steps, decision-making, or coordinating different actions
+7. **Create**: Use create_skill for single tasks, create_workflow for multi-step automations, and create_mcp_server for new integrations
+8. **Explain**: Tell them how to configure webhooks
+9. **Verify**: Suggest how to test the integration`;
 
 export function registerBuilderRoutes(server: FastifyInstance, _context: ServerContext): void {
   server.post<{ Body: ChatRequest }>(
@@ -265,11 +272,7 @@ export function registerBuilderRoutes(server: FastifyInstance, _context: ServerC
         .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
         .join("\n\n");
 
-      const fullPrompt = `${BUILDER_SYSTEM_PROMPT}
-
----
-
-Current system context:
+      const userMessage = `Current system context:
 ${userContext}
 
 ---
@@ -281,54 +284,72 @@ ${historyText}
 
 User: ${message}
 
-Use the Clawback tools to query the system and help the user. When creating skills or MCP servers, use the create_skill and create_mcp_server tools directly.`;
+Use the Clawback tools to query the system and help the user. When creating automations, prefer create_workflow for multi-step tasks and create_skill for simple single-purpose tasks. Use create_mcp_server for new integrations.`;
 
       try {
-        // Get the API URL from environment
-        const apiUrl =
-          process.env.CLAWBACK_API_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
+        const anthropic = new Anthropic();
 
-        // Path to MCP server
-        const mcpServerPath = resolve(__dirname, "../../../../packages/mcp-server/dist/index.js");
-
-        // Run with SDK using Clawback MCP server
+        const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
         let finalResponse = "";
+        let continueLoop = true;
 
-        const q = query({
-          prompt: fullPrompt,
-          options: {
+        while (continueLoop) {
+          const response = await anthropic.messages.create({
             model: "claude-sonnet-4-20250514",
-            // Allow all MCP tools without prompting for permissions
-            permissionMode: "bypassPermissions",
-            allowDangerouslySkipPermissions: true,
-            mcpServers: {
-              clawback: {
-                type: "stdio",
-                command: "node",
-                args: [mcpServerPath],
-                env: {
-                  CLAWBACK_API_URL: apiUrl,
-                },
-              },
-            },
-          },
-        });
+            max_tokens: 4096,
+            system: BUILDER_SYSTEM_PROMPT,
+            tools: BUILDER_TOOLS,
+            messages,
+          });
 
-        for await (const msg of q) {
-          if (msg.type === "assistant") {
-            const content = (msg as { message: { content: unknown } }).message.content;
-            if (Array.isArray(content)) {
-              for (const block of content as Array<{ type: string; text?: string }>) {
-                if (block.type === "text" && block.text) {
-                  finalResponse += block.text;
-                }
+          // Extract text from response
+          const textBlocks = response.content.filter(
+            (block): block is Anthropic.TextBlock => block.type === "text"
+          );
+          if (textBlocks.length > 0) {
+            finalResponse += textBlocks.map((b) => b.text).join("\n");
+          }
+
+          // Check for tool use
+          const toolUseBlocks = response.content.filter(
+            (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+          );
+
+          if (toolUseBlocks.length > 0) {
+            const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+            for (const toolUse of toolUseBlocks) {
+              try {
+                const result = await handleToolCall(
+                  toolUse.name,
+                  toolUse.input as Record<string, unknown>
+                );
+                toolResults.push({
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: JSON.stringify(result, null, 2),
+                });
+              } catch (error) {
+                toolResults.push({
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+                  is_error: true,
+                });
               }
             }
-          } else if (msg.type === "result") {
-            const resultMsg = msg as { result?: unknown };
-            if (resultMsg.result) {
-              finalResponse = String(resultMsg.result);
-            }
+
+            // Continue conversation with tool results
+            messages.push(
+              { role: "assistant", content: response.content },
+              { role: "user", content: toolResults }
+            );
+          } else {
+            continueLoop = false;
+          }
+
+          if (response.stop_reason === "end_turn" && toolUseBlocks.length === 0) {
+            continueLoop = false;
           }
         }
 

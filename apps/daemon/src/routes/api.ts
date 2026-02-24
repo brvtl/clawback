@@ -834,17 +834,18 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         metadata: { triggeredBy: "api" },
       });
 
-      // Create workflow run
-      const workflowRun = context.workflowRepo.createRun({
-        workflowId: workflow.id,
-        eventId: event.id,
-        input: payload,
+      // Execute async — execute() creates its own workflow run internally
+      void context.workflowExecutor.execute(workflow, event).catch((err: unknown) => {
+        console.error(
+          `[API] Workflow trigger failed: ${err instanceof Error ? err.message : "Unknown error"}`
+        );
       });
 
-      // Execute async
-      void context.workflowExecutor.execute(workflow, event);
-
-      return reply.send({ workflowRun, event });
+      return reply.status(202).send({
+        message: "Workflow triggered",
+        workflowId: workflow.id,
+        event,
+      });
     }
   );
 

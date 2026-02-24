@@ -1,4 +1,7 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import Anthropic from "@anthropic-ai/sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import micromatch from "micromatch";
 import {
   type Skill,
   type Event,
@@ -56,6 +59,12 @@ export interface ToolCallResult {
 export interface AgentLoopResult {
   output: Record<string, unknown>;
   toolCalls: ToolCallResult[];
+}
+
+interface McpConnection {
+  client: Client;
+  transport: StdioClientTransport;
+  serverName: string;
 }
 
 export class SkillExecutor {
@@ -260,18 +269,65 @@ export class SkillExecutor {
       };
     }
 
-    // Build MCP server configs from skill settings
-    const mcpServers = this.buildMcpServersConfig(skill);
-
-    const systemPrompt = this.buildSystemPrompt(skill, event);
+    const anthropic = new Anthropic({ apiKey: this.anthropicApiKey });
+    const mcpConnections: McpConnection[] = [];
     const toolCalls: ToolCallResult[] = [];
 
-    // Build the full prompt
-    const eventPayload = (
-      typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
-    ) as Record<string, unknown>;
+    try {
+      // Connect to MCP servers and discover tools
+      const mcpServerConfigs = this.buildMcpServersConfig(skill);
+      const allTools: Anthropic.Tool[] = [];
+      const clientMap = new Map<string, Client>();
 
-    const fullPrompt = `${systemPrompt}
+      for (const [serverName, config] of Object.entries(mcpServerConfigs)) {
+        try {
+          const resolvedEnv = this.resolveEnvVars(config.env);
+          const transport = new StdioClientTransport({
+            command: config.command,
+            args: config.args,
+            env: { ...process.env, ...resolvedEnv } as Record<string, string>,
+          });
+
+          const client = new Client({ name: `clawback-skill-${skill.id}`, version: "1.0.0" });
+          await client.connect(transport);
+          mcpConnections.push({ client, transport, serverName });
+          clientMap.set(serverName, client);
+
+          // Discover tools from this server
+          const { tools } = await client.listTools();
+          for (const tool of tools) {
+            const namespacedName = `mcp__${serverName}__${tool.name}`;
+
+            // Apply tool permissions filtering
+            if (!this.isToolAllowed(namespacedName, skill.toolPermissions)) {
+              continue;
+            }
+
+            allTools.push({
+              name: namespacedName,
+              description: tool.description ?? "",
+              input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
+            });
+          }
+
+          console.log(
+            `[SkillExecutor] Connected to MCP server "${serverName}" with ${tools.length} tools`
+          );
+        } catch (err) {
+          console.warn(
+            `[SkillExecutor] Failed to connect to MCP server "${serverName}":`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+
+      // Build system prompt and user message
+      const systemPrompt = this.buildSystemPrompt(skill, event);
+      const eventPayload = (
+        typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
+      ) as Record<string, unknown>;
+
+      const userMessage = `${systemPrompt}
 
 ---
 
@@ -281,74 +337,225 @@ Process this ${event.type} event from ${event.source}:
 ${JSON.stringify(eventPayload, null, 2)}
 \`\`\``;
 
-    const modelId = MODEL_IDS[skill.model ?? "sonnet"];
-    console.log(
-      `[SkillExecutor] Running skill "${skill.name}" with model ${skill.model ?? "sonnet"} (${modelId}) and ${Object.keys(mcpServers).length} MCP servers`
-    );
+      const modelId = MODEL_IDS[skill.model ?? "sonnet"];
+      console.log(
+        `[SkillExecutor] Running skill "${skill.name}" with model ${skill.model ?? "sonnet"} (${modelId}) and ${allTools.length} tools from ${mcpConnections.length} MCP servers`
+      );
 
-    let finalResponse = "";
-
-    try {
-      // Use the Claude Agent SDK for execution with MCP tools
-      const q = query({
-        prompt: fullPrompt,
-        options: {
-          model: modelId,
-          maxTurns: 20,
-          // Allow all MCP tools without prompting for permissions
-          permissionMode: "bypassPermissions",
-          allowDangerouslySkipPermissions: true,
-          mcpServers,
-        },
-      });
-
+      // Run Anthropic message loop
+      let messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
+      let finalResponse = "";
+      let continueLoop = true;
       let cpSequence = 0;
 
-      for await (const msg of q) {
-        if (msg.type === "assistant") {
-          const content = (msg as { message: { content: unknown } }).message.content;
-          if (Array.isArray(content)) {
-            for (const block of content as Array<{
-              type: string;
-              text?: string;
-              name?: string;
-              input?: unknown;
-              id?: string;
-            }>) {
-              if (block.type === "text" && block.text) {
-                finalResponse += block.text;
-                this.saveCheckpoint(_run.id, cpSequence++, "assistant_message", {
-                  text: block.text,
-                });
-              } else if (block.type === "tool_use") {
-                this.saveCheckpoint(_run.id, cpSequence++, "tool_call", {
-                  toolName: block.name,
-                  toolInput: block.input,
-                  toolUseId: block.id,
-                });
-              }
+      while (continueLoop) {
+        const response = await anthropic.messages.create({
+          model: modelId,
+          max_tokens: 4096,
+          tools: allTools.length > 0 ? allTools : undefined,
+          messages,
+        });
+
+        // Process text blocks
+        const textBlocks = response.content.filter(
+          (block): block is Anthropic.TextBlock => block.type === "text"
+        );
+        if (textBlocks.length > 0) {
+          const text = textBlocks.map((b) => b.text).join("\n");
+          finalResponse += text;
+          this.saveCheckpoint(_run.id, cpSequence++, "assistant_message", { text });
+        }
+
+        // Check for tool use
+        const toolUseBlocks = response.content.filter(
+          (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+        );
+
+        if (toolUseBlocks.length > 0) {
+          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+          for (const toolUse of toolUseBlocks) {
+            const toolName = toolUse.name;
+            const toolInput = toolUse.input as Record<string, unknown>;
+            const toolId = toolUse.id;
+
+            // Checkpoint tool call
+            this.saveCheckpoint(_run.id, cpSequence++, "tool_call", {
+              toolName,
+              toolInput,
+              toolUseId: toolId,
+            });
+
+            // Parse namespaced tool name: mcp__<server>__<tool>
+            const parts = toolName.split("__");
+            if (parts.length < 3 || parts[0] !== "mcp") {
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: toolId,
+                content: JSON.stringify({ error: `Invalid tool name format: ${toolName}` }),
+                is_error: true,
+              });
+              continue;
             }
-          }
-        } else if (msg.type === "result") {
-          const resultMsg = msg as { result?: unknown };
-          if (resultMsg.result) {
-            finalResponse = String(resultMsg.result);
+
+            const serverName = parts[1]!;
+            const originalToolName = parts.slice(2).join("__");
+            const client = clientMap.get(serverName);
+
+            if (!client) {
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: toolId,
+                content: JSON.stringify({
+                  error: `MCP server "${serverName}" not connected`,
+                }),
+                is_error: true,
+              });
+              continue;
+            }
+
+            const startedAt = new Date();
+            let resultContent: string;
+            let isError = false;
+
+            try {
+              const mcpResult = await client.callTool({
+                name: originalToolName,
+                arguments: toolInput,
+              });
+
+              // Extract text content from MCP result
+              if (mcpResult.isError) {
+                isError = true;
+                resultContent = this.extractMcpResultText(mcpResult.content);
+              } else {
+                resultContent = this.extractMcpResultText(mcpResult.content);
+              }
+            } catch (err) {
+              isError = true;
+              resultContent = JSON.stringify({
+                error: err instanceof Error ? err.message : "Tool call failed",
+              });
+            }
+
+            const completedAt = new Date();
+
+            // Track tool call
+            toolCalls.push({
+              id: toolId,
+              name: toolName,
+              input: toolInput,
+              output: isError ? null : this.tryParseJson(resultContent),
+              error: isError ? resultContent : null,
+              startedAt,
+              completedAt,
+            });
+
+            // Checkpoint tool result
             this.saveCheckpoint(_run.id, cpSequence++, "tool_result", {
-              result: resultMsg.result,
+              toolName,
+              toolUseId: toolId,
+              result: resultContent,
+              isError,
+            });
+
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolId,
+              content: resultContent,
+              is_error: isError,
             });
           }
+
+          // Continue conversation with tool results
+          messages = [
+            ...messages,
+            { role: "assistant", content: response.content },
+            { role: "user", content: toolResults },
+          ];
+        } else {
+          // No tool use — done
+          continueLoop = false;
+        }
+
+        // Safety check
+        if (response.stop_reason === "end_turn" && toolUseBlocks.length === 0) {
+          continueLoop = false;
         }
       }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Agent execution failed";
-      console.error(`[SkillExecutor] Error running skill "${skill.name}":`, errorMessage);
-      throw error;
+
+      return {
+        output: { response: finalResponse },
+        toolCalls,
+      };
+    } finally {
+      // Close all MCP connections
+      for (const conn of mcpConnections) {
+        try {
+          await conn.client.close();
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    }
+  }
+
+  /**
+   * Extract text from MCP tool result content.
+   */
+  private extractMcpResultText(content: unknown): string {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((item: { type?: string; text?: string }) => {
+          if (item.type === "text" && item.text) return item.text;
+          return JSON.stringify(item);
+        })
+        .join("\n");
+    }
+    return JSON.stringify(content);
+  }
+
+  /**
+   * Try to parse a JSON string, returning null if it fails.
+   */
+  private tryParseJson(text: string): Record<string, unknown> | null {
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return { text };
+    }
+  }
+
+  /**
+   * Resolve ${VAR} placeholders in env vars.
+   */
+  private resolveEnvVars(env?: Record<string, string>): Record<string, string> {
+    if (!env) return {};
+    const resolved: Record<string, string> = {};
+    for (const [key, value] of Object.entries(env)) {
+      resolved[key] = value.replace(/\$\{([^}]+)\}/g, (_match, varName: string) => {
+        return process.env[varName] ?? "";
+      });
+    }
+    return resolved;
+  }
+
+  /**
+   * Check if a tool is allowed based on permission patterns.
+   */
+  private isToolAllowed(toolName: string, permissions?: SharedToolPermissions): boolean {
+    if (!permissions) return true;
+
+    // If deny list matches, always deny
+    if (permissions.deny.length > 0 && micromatch.isMatch(toolName, permissions.deny)) {
+      return false;
     }
 
-    return {
-      output: { response: finalResponse },
-      toolCalls,
-    };
+    // If allow list is empty or contains wildcard, allow
+    if (permissions.allow.length === 0) return true;
+
+    return micromatch.isMatch(toolName, permissions.allow);
   }
 
   /**
