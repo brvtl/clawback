@@ -296,65 +296,91 @@ export class SkillExecutor {
       };
     }
 
+    const { connections, clientMap, allTools } = await this.connectMcpServers(skill);
+    try {
+      const { finalResponse, toolCalls } = await this.runMessageLoop(
+        skill,
+        event,
+        allTools,
+        clientMap,
+        _run
+      );
+      return {
+        output: finalResponse ? { response: finalResponse } : { message: "No response" },
+        toolCalls,
+      };
+    } finally {
+      await this.disconnectMcpServers(connections);
+    }
+  }
+
+  private async connectMcpServers(skill: Skill): Promise<{
+    connections: McpConnection[];
+    clientMap: Map<string, Client>;
+    allTools: Anthropic.Tool[];
+  }> {
+    const connections: McpConnection[] = [];
+    const allTools: Anthropic.Tool[] = [];
+    const clientMap = new Map<string, Client>();
+    const mcpServerConfigs = this.buildMcpServersConfig(skill);
+
+    for (const [serverName, config] of Object.entries(mcpServerConfigs)) {
+      try {
+        const resolvedEnv = this.resolveEnvVars(config.env);
+        const transport = new StdioClientTransport({
+          command: config.command,
+          args: config.args,
+          env: { ...process.env, ...resolvedEnv } as Record<string, string>,
+        });
+
+        const client = new Client({ name: `clawback-skill-${skill.id}`, version: "1.0.0" });
+        await client.connect(transport);
+        connections.push({ client, transport, serverName });
+        clientMap.set(serverName, client);
+
+        const { tools } = await client.listTools();
+        for (const tool of tools) {
+          const namespacedName = `mcp__${serverName}__${tool.name}`;
+          if (!this.isToolAllowed(namespacedName, skill.toolPermissions)) {
+            continue;
+          }
+          allTools.push({
+            name: namespacedName,
+            description: tool.description ?? "",
+            input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
+          });
+        }
+
+        console.log(
+          `[SkillExecutor] Connected to MCP server "${serverName}" with ${tools.length} tools`
+        );
+      } catch (err) {
+        console.warn(
+          `[SkillExecutor] Failed to connect to MCP server "${serverName}":`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+
+    return { connections, clientMap, allTools };
+  }
+
+  private async runMessageLoop(
+    skill: Skill,
+    event: Event,
+    allTools: Anthropic.Tool[],
+    clientMap: Map<string, Client>,
+    _run: Run
+  ): Promise<{ finalResponse: string; toolCalls: ToolCallResult[] }> {
     const anthropic = new Anthropic({ apiKey: this.anthropicApiKey });
-    const mcpConnections: McpConnection[] = [];
     const toolCalls: ToolCallResult[] = [];
 
-    try {
-      // Connect to MCP servers and discover tools
-      const mcpServerConfigs = this.buildMcpServersConfig(skill);
-      const allTools: Anthropic.Tool[] = [];
-      const clientMap = new Map<string, Client>();
+    const systemPrompt = this.buildSystemPrompt(skill, event);
+    const eventPayload = (
+      typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
+    ) as Record<string, unknown>;
 
-      for (const [serverName, config] of Object.entries(mcpServerConfigs)) {
-        try {
-          const resolvedEnv = this.resolveEnvVars(config.env);
-          const transport = new StdioClientTransport({
-            command: config.command,
-            args: config.args,
-            env: { ...process.env, ...resolvedEnv } as Record<string, string>,
-          });
-
-          const client = new Client({ name: `clawback-skill-${skill.id}`, version: "1.0.0" });
-          await client.connect(transport);
-          mcpConnections.push({ client, transport, serverName });
-          clientMap.set(serverName, client);
-
-          // Discover tools from this server
-          const { tools } = await client.listTools();
-          for (const tool of tools) {
-            const namespacedName = `mcp__${serverName}__${tool.name}`;
-
-            // Apply tool permissions filtering
-            if (!this.isToolAllowed(namespacedName, skill.toolPermissions)) {
-              continue;
-            }
-
-            allTools.push({
-              name: namespacedName,
-              description: tool.description ?? "",
-              input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
-            });
-          }
-
-          console.log(
-            `[SkillExecutor] Connected to MCP server "${serverName}" with ${tools.length} tools`
-          );
-        } catch (err) {
-          console.warn(
-            `[SkillExecutor] Failed to connect to MCP server "${serverName}":`,
-            err instanceof Error ? err.message : err
-          );
-        }
-      }
-
-      // Build system prompt and user message
-      const systemPrompt = this.buildSystemPrompt(skill, event);
-      const eventPayload = (
-        typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
-      ) as Record<string, unknown>;
-
-      const userMessage = `${systemPrompt}
+    const userMessage = `${systemPrompt}
 
 ---
 
@@ -364,170 +390,159 @@ Process this ${event.type} event from ${event.source}:
 ${JSON.stringify(eventPayload, null, 2)}
 \`\`\``;
 
-      const modelId = MODEL_IDS[skill.model ?? "sonnet"];
-      console.log(
-        `[SkillExecutor] Running skill "${skill.name}" with model ${skill.model ?? "sonnet"} (${modelId}) and ${allTools.length} tools from ${mcpConnections.length} MCP servers`
+    const modelId = MODEL_IDS[skill.model ?? "sonnet"];
+    console.log(
+      `[SkillExecutor] Running skill "${skill.name}" with model ${skill.model ?? "sonnet"} (${modelId}) and ${allTools.length} tools from ${clientMap.size} MCP servers`
+    );
+
+    let messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
+    let finalResponse = "";
+    let continueLoop = true;
+    let cpSequence = 0;
+
+    while (continueLoop) {
+      const response: Anthropic.Message = await callWithRetry(
+        () =>
+          anthropic.messages.create({
+            model: modelId,
+            max_tokens: 4096,
+            tools: allTools.length > 0 ? allTools : undefined,
+            messages,
+          }),
+        3,
+        `skill "${skill.name}"`
       );
 
-      // Run Anthropic message loop
-      let messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
-      let finalResponse = "";
-      let continueLoop = true;
-      let cpSequence = 0;
+      // Process text blocks
+      const textBlocks = response.content.filter(
+        (block): block is Anthropic.TextBlock => block.type === "text"
+      );
+      if (textBlocks.length > 0) {
+        const text = textBlocks.map((b) => b.text).join("\n");
+        finalResponse += text;
+        this.saveCheckpoint(_run.id, cpSequence++, "assistant_message", { text });
+      }
 
-      while (continueLoop) {
-        const response: Anthropic.Message = await callWithRetry(
-          () =>
-            anthropic.messages.create({
-              model: modelId,
-              max_tokens: 4096,
-              tools: allTools.length > 0 ? allTools : undefined,
-              messages,
-            }),
-          3,
-          `skill "${skill.name}"`
-        );
+      // Check for tool use
+      const toolUseBlocks = response.content.filter(
+        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+      );
 
-        // Process text blocks
-        const textBlocks = response.content.filter(
-          (block): block is Anthropic.TextBlock => block.type === "text"
-        );
-        if (textBlocks.length > 0) {
-          const text = textBlocks.map((b) => b.text).join("\n");
-          finalResponse += text;
-          this.saveCheckpoint(_run.id, cpSequence++, "assistant_message", { text });
-        }
+      if (toolUseBlocks.length > 0) {
+        const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
-        // Check for tool use
-        const toolUseBlocks = response.content.filter(
-          (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-        );
+        for (const toolUse of toolUseBlocks) {
+          const toolName = toolUse.name;
+          const toolInput = toolUse.input as Record<string, unknown>;
+          const toolId = toolUse.id;
 
-        if (toolUseBlocks.length > 0) {
-          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+          this.saveCheckpoint(_run.id, cpSequence++, "tool_call", {
+            toolName,
+            toolInput,
+            toolUseId: toolId,
+          });
 
-          for (const toolUse of toolUseBlocks) {
-            const toolName = toolUse.name;
-            const toolInput = toolUse.input as Record<string, unknown>;
-            const toolId = toolUse.id;
-
-            // Checkpoint tool call
-            this.saveCheckpoint(_run.id, cpSequence++, "tool_call", {
-              toolName,
-              toolInput,
-              toolUseId: toolId,
-            });
-
-            // Parse namespaced tool name: mcp__<server>__<tool>
-            const parts = toolName.split("__");
-            if (parts.length < 3 || parts[0] !== "mcp") {
-              toolResults.push({
-                type: "tool_result",
-                tool_use_id: toolId,
-                content: JSON.stringify({ error: `Invalid tool name format: ${toolName}` }),
-                is_error: true,
-              });
-              continue;
-            }
-
-            const serverName = parts[1]!;
-            const originalToolName = parts.slice(2).join("__");
-            const client = clientMap.get(serverName);
-
-            if (!client) {
-              toolResults.push({
-                type: "tool_result",
-                tool_use_id: toolId,
-                content: JSON.stringify({
-                  error: `MCP server "${serverName}" not connected`,
-                }),
-                is_error: true,
-              });
-              continue;
-            }
-
-            const startedAt = new Date();
-            let resultContent: string;
-            let isError = false;
-
-            try {
-              const mcpResult = await client.callTool({
-                name: originalToolName,
-                arguments: toolInput,
-              });
-
-              // Extract text content from MCP result
-              if (mcpResult.isError) {
-                isError = true;
-                resultContent = this.extractMcpResultText(mcpResult.content);
-              } else {
-                resultContent = this.extractMcpResultText(mcpResult.content);
-              }
-            } catch (err) {
-              isError = true;
-              resultContent = JSON.stringify({
-                error: err instanceof Error ? err.message : "Tool call failed",
-              });
-            }
-
-            const completedAt = new Date();
-
-            // Track tool call
-            toolCalls.push({
-              id: toolId,
-              name: toolName,
-              input: toolInput,
-              output: isError ? null : this.tryParseJson(resultContent),
-              error: isError ? resultContent : null,
-              startedAt,
-              completedAt,
-            });
-
-            // Checkpoint tool result
-            this.saveCheckpoint(_run.id, cpSequence++, "tool_result", {
-              toolName,
-              toolUseId: toolId,
-              result: resultContent,
-              isError,
-            });
-
+          // Parse namespaced tool name: mcp__<server>__<tool>
+          const parts = toolName.split("__");
+          if (parts.length < 3 || parts[0] !== "mcp") {
             toolResults.push({
               type: "tool_result",
               tool_use_id: toolId,
-              content: resultContent,
-              is_error: isError,
+              content: JSON.stringify({ error: `Invalid tool name format: ${toolName}` }),
+              is_error: true,
+            });
+            continue;
+          }
+
+          const serverName = parts[1]!;
+          const originalToolName = parts.slice(2).join("__");
+          const client = clientMap.get(serverName);
+
+          if (!client) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolId,
+              content: JSON.stringify({
+                error: `MCP server "${serverName}" not connected`,
+              }),
+              is_error: true,
+            });
+            continue;
+          }
+
+          const startedAt = new Date();
+          let resultContent: string;
+          let isError = false;
+
+          try {
+            const mcpResult = await client.callTool({
+              name: originalToolName,
+              arguments: toolInput,
+            });
+
+            if (mcpResult.isError) {
+              isError = true;
+              resultContent = this.extractMcpResultText(mcpResult.content);
+            } else {
+              resultContent = this.extractMcpResultText(mcpResult.content);
+            }
+          } catch (err) {
+            isError = true;
+            resultContent = JSON.stringify({
+              error: err instanceof Error ? err.message : "Tool call failed",
             });
           }
 
-          // Continue conversation with tool results
-          messages = [
-            ...messages,
-            { role: "assistant", content: response.content },
-            { role: "user", content: toolResults },
-          ];
-        } else {
-          // No tool use — done
-          continueLoop = false;
+          const completedAt = new Date();
+
+          toolCalls.push({
+            id: toolId,
+            name: toolName,
+            input: toolInput,
+            output: isError ? null : this.tryParseJson(resultContent),
+            error: isError ? resultContent : null,
+            startedAt,
+            completedAt,
+          });
+
+          this.saveCheckpoint(_run.id, cpSequence++, "tool_result", {
+            toolName,
+            toolUseId: toolId,
+            result: resultContent,
+            isError,
+          });
+
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: toolId,
+            content: resultContent,
+            is_error: isError,
+          });
         }
 
-        // Safety check
-        if (response.stop_reason === "end_turn" && toolUseBlocks.length === 0) {
-          continueLoop = false;
-        }
+        messages = [
+          ...messages,
+          { role: "assistant", content: response.content },
+          { role: "user", content: toolResults },
+        ];
+      } else {
+        continueLoop = false;
       }
 
-      return {
-        output: { response: finalResponse },
-        toolCalls,
-      };
-    } finally {
-      // Close all MCP connections
-      for (const conn of mcpConnections) {
-        try {
-          await conn.client.close();
-        } catch {
-          // Ignore cleanup errors
-        }
+      if (response.stop_reason === "end_turn" && toolUseBlocks.length === 0) {
+        continueLoop = false;
+      }
+    }
+
+    return { finalResponse, toolCalls };
+  }
+
+  private async disconnectMcpServers(connections: McpConnection[]): Promise<void> {
+    for (const conn of connections) {
+      try {
+        await conn.client.close();
+      } catch {
+        // Ignore cleanup errors
       }
     }
   }
