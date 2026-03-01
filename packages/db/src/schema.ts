@@ -62,6 +62,7 @@ export const skills = sqliteTable("skills", {
   reviewResult: text("review_result"), // JSON with review details
   // Model selection
   model: text("model", { enum: ["opus", "sonnet", "haiku"] }).default("sonnet"),
+  system: integer("system", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
@@ -105,6 +106,7 @@ export const workflows = sqliteTable("workflows", {
     .notNull()
     .default("opus"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  system: integer("system", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
@@ -177,6 +179,19 @@ export const hitlRequests = sqliteTable("hitl_requests", {
   respondedAt: integer("responded_at", { mode: "number" }),
 });
 
+// Builder Sessions table - persistent AI builder chat sessions
+export const builderSessions = sqliteTable("builder_sessions", {
+  id: text("id").primaryKey(),
+  status: text("status", { enum: ["active", "processing", "completed", "error"] })
+    .notNull()
+    .default("active"),
+  messages: text("messages").notNull().default("[]"), // JSON: Anthropic.MessageParam[]
+  title: text("title"),
+  lastError: text("last_error"),
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
 // Notifications table - user notifications
 export const notifications = sqliteTable("notifications", {
   id: text("id").primaryKey(),
@@ -221,3 +236,6 @@ export type NewCheckpoint = typeof checkpoints.$inferInsert;
 
 export type HitlRequest = typeof hitlRequests.$inferSelect;
 export type NewHitlRequest = typeof hitlRequests.$inferInsert;
+
+export type BuilderSession = typeof builderSessions.$inferSelect;
+export type NewBuilderSession = typeof builderSessions.$inferInsert;

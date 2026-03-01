@@ -13,6 +13,7 @@ export const WorkflowSchema = z.object({
   skills: z.array(z.string()), // Skill IDs available to the orchestrator
   orchestratorModel: OrchestratorModelSchema.default("opus"),
   enabled: z.boolean().default(true),
+  system: z.boolean().default(false),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
 });

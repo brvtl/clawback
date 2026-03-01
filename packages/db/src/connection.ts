@@ -90,6 +90,7 @@ export function createTestConnection(): DatabaseConnection {
       review_status TEXT,
       review_result TEXT,
       model TEXT DEFAULT 'sonnet',
+      system INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -142,6 +143,7 @@ export function createTestConnection(): DatabaseConnection {
       skills TEXT NOT NULL,
       orchestrator_model TEXT NOT NULL DEFAULT 'opus',
       enabled INTEGER NOT NULL DEFAULT 1,
+      system INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -174,6 +176,16 @@ export function createTestConnection(): DatabaseConnection {
       created_at INTEGER NOT NULL,
       FOREIGN KEY (run_id) REFERENCES runs(id),
       FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS builder_sessions (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'active',
+      messages TEXT NOT NULL DEFAULT '[]',
+      title TEXT,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS hitl_requests (

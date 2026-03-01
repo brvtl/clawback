@@ -12,10 +12,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.32",
     "@anthropic-ai/sdk": "^0.37.0",
     "@clawback/db": "workspace:*",
     "@clawback/shared": "workspace:*",
+    "clawback-mcp": "workspace:*",
     "@fastify/cors": "^9.0.0",
     "@fastify/websocket": "^9.0.0",
     "@modelcontextprotocol/sdk": "^1.0.0",

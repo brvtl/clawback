@@ -70,6 +70,20 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
     requiredEnv: ["SQLITE_DB_PATH"],
   },
   {
+    package: "@playwright/mcp",
+    displayName: "Playwright",
+    command: "npx",
+    args: ["-y", "@playwright/mcp@latest", "--headless"],
+    requiredEnv: [],
+  },
+  {
+    package: "mcp-server-fetch",
+    displayName: "Fetch",
+    command: "uvx",
+    args: ["mcp-server-fetch"],
+    requiredEnv: [],
+  },
+  {
     package: "@dkvdm/onepassword-mcp-server",
     displayName: "1Password",
     command: "npx",

@@ -54,6 +54,7 @@ export interface ApiSkill {
   notifications?: { onComplete?: boolean; onError?: boolean };
   knowledge?: string[];
   model?: SkillModel;
+  system?: boolean;
 }
 
 export interface ApiNotification {
@@ -93,6 +94,7 @@ export interface ApiWorkflow {
   skills: string[];
   orchestratorModel: "opus" | "sonnet";
   enabled: boolean;
+  system?: boolean;
   createdAt?: number;
   updatedAt?: number;
 }
@@ -469,6 +471,40 @@ class ApiClient {
         method: "POST",
       }
     );
+  }
+  // Builder session methods
+  async sendBuilderMessage(message: string, sessionId?: string): Promise<{ sessionId: string }> {
+    return this.fetch<{ sessionId: string }>("/api/builder/chat", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, message }),
+    });
+  }
+
+  async getBuilderSessions(): Promise<{
+    sessions: Array<{
+      id: string;
+      status: string;
+      title: string | null;
+      lastError: string | null;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  }> {
+    return this.fetch("/api/builder/sessions");
+  }
+
+  async getBuilderSession(id: string): Promise<{
+    session: {
+      id: string;
+      status: string;
+      title: string | null;
+      lastError: string | null;
+      createdAt: number;
+      updatedAt: number;
+    };
+    messages: unknown[];
+  }> {
+    return this.fetch(`/api/builder/sessions/${id}`);
   }
 }
 

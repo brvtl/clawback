@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastif
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { randomBytes } from "crypto";
+import { existsSync } from "fs";
+import { resolve } from "path";
 import { createTestConnection, type DatabaseConnection } from "@clawback/db";
 import {
   EventRepository,
@@ -13,6 +15,7 @@ import {
   WorkflowRepository,
   CheckpointRepository,
   HitlRequestRepository,
+  BuilderSessionRepository,
 } from "@clawback/db";
 import { SkillRegistry } from "./skills/registry.js";
 import { SkillExecutor } from "./skills/executor.js";
@@ -22,6 +25,8 @@ import { SchedulerService } from "./services/scheduler.js";
 import { RemoteSkillFetcher } from "./services/remote-skill-fetcher.js";
 import { SkillReviewer } from "./services/skill-reviewer.js";
 import { WorkflowExecutor } from "./services/workflow-executor.js";
+import { BuilderExecutor } from "./services/builder-executor.js";
+import { seedBuilderSkills, getBuilderOrchestratorInstructions } from "./services/builder-seeds.js";
 import { WorkflowRegistry } from "./workflows/registry.js";
 import { registerWebhookRoutes } from "./routes/webhook.js";
 import { registerApiRoutes } from "./routes/api.js";
@@ -46,6 +51,8 @@ export interface ServerContext {
   skillReviewer: SkillReviewer;
   workflowRegistry: WorkflowRegistry;
   workflowExecutor: WorkflowExecutor;
+  builderSessionRepo: BuilderSessionRepository;
+  builderExecutor: BuilderExecutor;
 }
 
 export interface CreateServerOptions extends FastifyServerOptions {
@@ -72,6 +79,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const notifRepo = new NotificationRepository(db);
   const skillRepo = new SkillRepository(db);
   const mcpServerRepo = new McpServerRepository(db);
+  mcpServerRepo.seedKnownServers();
   const scheduledJobRepo = new ScheduledJobRepository(db);
   const workflowRepo = new WorkflowRepository(db);
   const checkpointRepo = new CheckpointRepository(db);
@@ -86,10 +94,50 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   });
 
+  // Seed Clawback MCP server (builder skills need this)
+  let clawbackMcp = mcpServerRepo.findByName("clawback");
+  if (!clawbackMcp) {
+    const mcpServerPath = existsSync("/app/packages/mcp-server/dist/index.js")
+      ? "/app/packages/mcp-server/dist/index.js"
+      : resolve(import.meta.dirname, "../../../packages/mcp-server/dist/index.js");
+    clawbackMcp = mcpServerRepo.create({
+      name: "clawback",
+      description: "Clawback API - manages skills, workflows, MCP servers",
+      command: "node",
+      args: [mcpServerPath],
+      env: {},
+    });
+    console.log(`[Server] Seeded Clawback MCP server: ${clawbackMcp.id}`);
+  }
+
+  // Seed builder system skills (before registry load so they're cached)
+  const builderSkillMap = seedBuilderSkills(skillRepo);
+  const builderSkillIds = Array.from(builderSkillMap.values());
+  console.log(`[Server] Builder system skills ready: ${builderSkillIds.length} skills`);
+
+  // Bootstrap system builder workflow
+  let builderWorkflow = workflowRepo.findSystem("AI Builder");
+  const builderInstructions = getBuilderOrchestratorInstructions(builderSkillMap);
+  if (!builderWorkflow) {
+    builderWorkflow = workflowRepo.createSystem({
+      name: "AI Builder",
+      description:
+        "System workflow for the AI builder chat. Creates skills, workflows, and MCP servers via conversation.",
+      instructions: builderInstructions,
+    });
+    console.log(`[Server] Created system builder workflow: ${builderWorkflow.id}`);
+  } else {
+    // Update instructions + skills on every startup (idempotent)
+    workflowRepo.update(builderWorkflow.id, {
+      instructions: builderInstructions,
+      skills: builderSkillIds,
+    });
+  }
+
   // Initialize skill registry with database backing
   const skillRegistry = new SkillRegistry(skillRepo);
 
-  // Load skills from database
+  // Load skills from database (after seeding so system skills are cached)
   skillRegistry.loadSkills();
 
   // Initialize scheduler service
@@ -116,7 +164,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   });
 
-  // Initialize workflow registry
+  // Initialize workflow registry (after seeding)
   const workflowRegistry = new WorkflowRegistry(workflowRepo);
   workflowRegistry.loadWorkflows();
 
@@ -131,6 +179,26 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     hitlRequestRepo,
     notificationService,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  });
+
+  // Initialize builder session support
+  const builderSessionRepo = new BuilderSessionRepository(db);
+  const staleReset = builderSessionRepo.resetStale();
+  if (staleReset > 0) {
+    console.log(`[Server] Reset ${staleReset} stale builder session(s) to active`);
+  }
+
+  const builderExecutor = new BuilderExecutor({
+    builderSessionRepo,
+    notificationService,
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    workflowRepo,
+    skillRepo,
+    checkpointRepo,
+    eventRepo,
+    skillExecutor,
+    builderWorkflowId: builderWorkflow.id,
+    builderSkillIds,
   });
 
   // Initialize event queue
@@ -352,6 +420,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skillReviewer,
     workflowRegistry,
     workflowExecutor,
+    builderSessionRepo,
+    builderExecutor,
   };
 
   // Decorate fastify with context

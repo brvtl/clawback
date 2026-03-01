@@ -45,7 +45,15 @@
           href="/skills/{skill.id}"
           class="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-gray-600 transition-colors"
         >
-          <h3 class="text-lg font-semibold mb-2">{skill.name}</h3>
+          <div class="flex items-center gap-2 mb-2">
+            <h3 class="text-lg font-semibold">{skill.name}</h3>
+            {#if skill.system}
+              <span
+                class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                >System</span
+              >
+            {/if}
+          </div>
           {#if skill.description}
             <p class="text-gray-400 text-sm mb-4">{skill.description}</p>
           {/if}

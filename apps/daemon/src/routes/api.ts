@@ -291,6 +291,13 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
   server.delete<{ Params: { id: string } }>(
     "/api/skills/:id",
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const skill = context.skillRegistry.getSkill(request.params.id);
+      if (!skill) {
+        return reply.status(404).send({ error: "Skill not found" });
+      }
+      if (skill.system) {
+        return reply.status(403).send({ error: "Cannot delete system skills" });
+      }
       const deleted = context.skillRegistry.deleteSkill(request.params.id);
       if (!deleted) {
         return reply.status(404).send({ error: "Skill not found" });
@@ -473,8 +480,8 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         args = body.args ?? existing.args;
       }
 
-      // Validate and auto-fix env vars for known MCP server types
-      let env = body.env;
+      // Merge env vars with existing (partial updates don't wipe unrelated keys)
+      let env = body.env ? { ...existing.env, ...body.env } : undefined;
       let warnings: string[] = [];
       if (env) {
         const validation = validateMcpServerEnv(args, env);
@@ -741,6 +748,13 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
   server.delete<{ Params: { id: string } }>(
     "/api/workflows/:id",
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const workflow = context.workflowRegistry.getWorkflow(request.params.id);
+      if (!workflow) {
+        return reply.status(404).send({ error: "Workflow not found" });
+      }
+      if (workflow.system) {
+        return reply.status(403).send({ error: "Cannot delete system workflows" });
+      }
       const deleted = context.workflowRegistry.deleteWorkflow(request.params.id);
       if (!deleted) {
         return reply.status(404).send({ error: "Workflow not found" });
@@ -834,17 +848,18 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
         metadata: { triggeredBy: "api" },
       });
 
-      // Create workflow run
-      const workflowRun = context.workflowRepo.createRun({
-        workflowId: workflow.id,
-        eventId: event.id,
-        input: payload,
+      // Execute async — execute() creates its own workflow run internally
+      void context.workflowExecutor.execute(workflow, event).catch((err: unknown) => {
+        console.error(
+          `[API] Workflow trigger failed: ${err instanceof Error ? err.message : "Unknown error"}`
+        );
       });
 
-      // Execute async
-      void context.workflowExecutor.execute(workflow, event);
-
-      return reply.send({ workflowRun, event });
+      return reply.status(202).send({
+        message: "Workflow triggered",
+        workflowId: workflow.id,
+        event,
+      });
     }
   );
 

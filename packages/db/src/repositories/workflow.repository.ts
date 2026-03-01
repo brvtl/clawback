@@ -1,7 +1,10 @@
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import {
   workflows,
   workflowRuns,
+  scheduledJobs,
+  checkpoints,
+  hitlRequests,
   type DbWorkflow,
   type WorkflowRun as DbWorkflowRun,
 } from "../schema.js";
@@ -54,6 +57,7 @@ export class WorkflowRepository {
       skills: JSON.parse(dbWorkflow.skills) as string[],
       orchestratorModel: dbWorkflow.orchestratorModel,
       enabled: dbWorkflow.enabled ?? true,
+      system: dbWorkflow.system ?? false,
       createdAt: dbWorkflow.createdAt,
       updatedAt: dbWorkflow.updatedAt,
     };
@@ -112,6 +116,38 @@ export class WorkflowRepository {
     return results.map((r) => this.toDomain(r));
   }
 
+  findSystem(name: string): Workflow | undefined {
+    const result = this.db
+      .select()
+      .from(workflows)
+      .where(and(eq(workflows.system, true), eq(workflows.name, name)))
+      .get();
+    return result ? this.toDomain(result) : undefined;
+  }
+
+  createSystem(input: { name: string; description?: string; instructions: string }): Workflow {
+    const id = generateWorkflowId();
+    const now = Date.now();
+
+    const dbWorkflow: typeof workflows.$inferInsert = {
+      id,
+      name: input.name,
+      description: input.description,
+      instructions: input.instructions,
+      triggers: "[]",
+      skills: "[]",
+      orchestratorModel: "opus",
+      enabled: true,
+      system: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.db.insert(workflows).values(dbWorkflow).run();
+
+    return this.toDomain(dbWorkflow as DbWorkflow);
+  }
+
   update(id: string, input: UpdateWorkflowInput): Workflow | undefined {
     const existing = this.db.select().from(workflows).where(eq(workflows.id, id)).get();
     if (!existing) {
@@ -136,6 +172,18 @@ export class WorkflowRepository {
   }
 
   delete(id: string): boolean {
+    const existing = this.db.select().from(workflows).where(eq(workflows.id, id)).get();
+    if (!existing) return false;
+    if (existing.system) return false;
+
+    // Cascade delete: checkpoints/hitl -> workflow_runs -> scheduled_jobs -> workflow
+    const runs = this.db.select().from(workflowRuns).where(eq(workflowRuns.workflowId, id)).all();
+    for (const run of runs) {
+      this.db.delete(hitlRequests).where(eq(hitlRequests.workflowRunId, run.id)).run();
+      this.db.delete(checkpoints).where(eq(checkpoints.workflowRunId, run.id)).run();
+    }
+    this.db.delete(workflowRuns).where(eq(workflowRuns.workflowId, id)).run();
+    this.db.delete(scheduledJobs).where(eq(scheduledJobs.workflowId, id)).run();
     const result = this.db.delete(workflows).where(eq(workflows.id, id)).run();
     return result.changes > 0;
   }

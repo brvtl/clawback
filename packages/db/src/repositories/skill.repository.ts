@@ -1,5 +1,5 @@
-import { eq } from "drizzle-orm";
-import { skills, type DbSkill } from "../schema.js";
+import { eq, and } from "drizzle-orm";
+import { skills, scheduledJobs, type DbSkill } from "../schema.js";
 import type { DatabaseConnection } from "../connection.js";
 import type {
   Skill,
@@ -83,6 +83,7 @@ export class SkillRepository {
         : undefined,
       // Model selection
       model: (dbSkill.model as SkillModel) ?? "sonnet",
+      system: dbSkill.system ?? false,
     };
   }
 
@@ -130,6 +131,48 @@ export class SkillRepository {
     return result ? this.toDomain(result) : undefined;
   }
 
+  findSystem(name: string): Skill | undefined {
+    const result = this.db
+      .select()
+      .from(skills)
+      .where(and(eq(skills.system, true), eq(skills.name, name)))
+      .get();
+    return result ? this.toDomain(result) : undefined;
+  }
+
+  createSystem(input: {
+    name: string;
+    description?: string;
+    instructions: string;
+    mcpServers?: McpServersInput;
+    toolPermissions?: ToolPermissions;
+    model?: SkillModel;
+  }): Skill {
+    const id = generateSkillId();
+    const now = Date.now();
+
+    const dbSkill: typeof skills.$inferInsert = {
+      id,
+      name: input.name,
+      description: input.description,
+      instructions: input.instructions,
+      triggers: "[]",
+      mcpServers: JSON.stringify(input.mcpServers ?? {}),
+      toolPermissions: JSON.stringify(input.toolPermissions ?? { allow: ["*"], deny: [] }),
+      notifications: JSON.stringify({ onComplete: false, onError: true }),
+      enabled: true,
+      source: "api",
+      system: true,
+      model: input.model ?? "sonnet",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.db.insert(skills).values(dbSkill).run();
+
+    return this.toDomain({ ...dbSkill, enabled: true, system: true } as DbSkill);
+  }
+
   findAll(enabledOnly = true): Skill[] {
     let query = this.db.select().from(skills);
     if (enabledOnly) {
@@ -173,6 +216,12 @@ export class SkillRepository {
   }
 
   delete(id: string): boolean {
+    // Guard against deleting system skills
+    const existing = this.db.select().from(skills).where(eq(skills.id, id)).get();
+    if (!existing || existing.system) return false;
+
+    // Remove scheduled jobs referencing this skill to avoid FK constraint failure
+    this.db.delete(scheduledJobs).where(eq(scheduledJobs.skillId, id)).run();
     const result = this.db.delete(skills).where(eq(skills.id, id)).run();
     return result.changes > 0;
   }

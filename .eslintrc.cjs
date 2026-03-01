@@ -64,6 +64,13 @@ module.exports = {
       },
     },
     {
+      files: ["apps/daemon/**/*.ts", "packages/db/**/*.ts"],
+      rules: {
+        // Server-side code uses console.log for structured logging
+        "no-console": "off",
+      },
+    },
+    {
       files: ["*.test.ts", "*.spec.ts"],
       rules: {
         "@typescript-eslint/no-explicit-any": "off",
