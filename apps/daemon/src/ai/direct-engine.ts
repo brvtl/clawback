@@ -189,8 +189,14 @@ export class DirectApiEngine implements AiEngine {
     let messages = [...config.messages];
     let finalText = "";
     let continueLoop = true;
+    const maxTurns = config.maxTurns ?? 50;
+    let turnCount = 0;
 
     while (continueLoop) {
+      if (++turnCount > maxTurns) {
+        console.warn(`[DirectApiEngine] Max turns (${maxTurns}) reached, stopping loop`);
+        break;
+      }
       const response: Anthropic.Message = await callWithRetry(
         () =>
           this.anthropic.messages.create({

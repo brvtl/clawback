@@ -40,9 +40,14 @@ export class AgentSdkEngine implements AiEngine {
           ct,
           () => {
             paused = true;
-            // Abort the SDK process to prevent it from making the next API call.
-            // We delay slightly to let the MCP tool response write complete.
-            setTimeout(() => abortController.abort(), 100);
+            // q.close() in the for-await loop is the primary pause mechanism.
+            // This is a safety-net fallback in case the loop hasn't yielded yet.
+            setTimeout(() => {
+              if (!abortController.signal.aborted) {
+                console.warn("[AgentSdkEngine] Force-aborting after pause timeout");
+                abortController.abort();
+              }
+            }, 5000);
           },
           (id) => {
             pauseToolUseId = id;
@@ -73,7 +78,9 @@ export class AgentSdkEngine implements AiEngine {
 
     // Collect messages from SDK for state reconstruction
     const collectedMessages = [...config.messages];
+    const toolUseIdToName = new Map<string, string>();
     let finalText = "";
+    let resultHandled = false;
 
     try {
       // Strip CLAUDECODE env var to allow spawning claude CLI from within a Claude Code session
@@ -109,6 +116,7 @@ export class AgentSdkEngine implements AiEngine {
             if (block.type === "text") {
               textParts.push(block.text);
             } else if (block.type === "tool_use") {
+              toolUseIdToName.set(block.id, block.name);
               observer.onToolCall(block.name, block.input, block.id);
             }
           }
@@ -127,21 +135,16 @@ export class AgentSdkEngine implements AiEngine {
             if (block.type === "tool_result") {
               const resultText =
                 typeof block.content === "string" ? block.content : JSON.stringify(block.content);
-              observer.onToolResult(
-                block.tool_use_id,
-                block.tool_use_id,
-                resultText,
-                !!block.is_error
-              );
+              const toolName = toolUseIdToName.get(block.tool_use_id) ?? block.tool_use_id;
+              observer.onToolResult(toolName, block.tool_use_id, resultText, !!block.is_error);
             }
           }
 
           collectedMessages.push({ role: "user", content });
         } else if (message.type === "result") {
-          if (message.subtype === "success" && message.result) {
-            if (!finalText.includes(message.result)) {
-              finalText += message.result;
-            }
+          if (message.subtype === "success" && message.result && !resultHandled) {
+            finalText += message.result;
+            resultHandled = true;
           }
         }
 
@@ -243,8 +246,20 @@ export class AgentSdkEngine implements AiEngine {
    * Convert Anthropic MessageParam[] to a prompt string for the SDK.
    * Preserves tool call/result context so Claude understands the conversation history
    * (important for HITL resume where the SDK starts a fresh session).
+   *
+   * NOTE: This flattening loses role attribution and turn structure. For complex
+   * workflows with many messages before HITL, context quality may degrade.
+   * The DirectApiEngine preserves full structured messages and is preferred
+   * for HITL-heavy workflows.
    */
   private messagesToPromptContent(messages: Array<{ role: string; content: unknown }>): string {
+    if (messages.length > 10) {
+      console.warn(
+        `[AgentSdkEngine] Flattening ${messages.length} messages to prompt string. ` +
+          `Context quality may degrade. Consider DirectApiEngine for HITL-heavy workflows.`
+      );
+    }
+
     const parts: string[] = [];
 
     for (const msg of messages) {
