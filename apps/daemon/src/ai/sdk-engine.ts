@@ -8,11 +8,12 @@ import type { AiEngine, LoopConfig, LoopObserver, LoopResult, CustomToolDef } fr
  */
 export class AgentSdkEngine implements AiEngine {
   async runLoop(config: LoopConfig, observer: LoopObserver): Promise<LoopResult> {
-    // Build MCP server configs for SDK
-    const mcpServers: Record<string, unknown> = {};
+    // Build MCP server configs for SDK (array format: AgentMcpServerSpec[])
+    const mcpServers: Array<
+      Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
+    > = [];
 
     for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
-      // Resolve ${VAR} placeholders
       const resolvedEnv: Record<string, string> = {};
       if (serverConfig.env) {
         for (const [key, value] of Object.entries(serverConfig.env)) {
@@ -22,11 +23,13 @@ export class AgentSdkEngine implements AiEngine {
         }
       }
 
-      mcpServers[name] = {
-        command: serverConfig.command,
-        args: serverConfig.args,
-        env: resolvedEnv,
-      };
+      mcpServers.push({
+        [name]: {
+          command: serverConfig.command,
+          args: serverConfig.args,
+          env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined,
+        },
+      });
     }
 
     // Build custom tools as an SDK MCP server
@@ -54,7 +57,13 @@ export class AgentSdkEngine implements AiEngine {
         tools: sdkTools,
       });
 
-      mcpServers["clawback-custom"] = customServer;
+      mcpServers.push({
+        "clawback-custom": customServer as unknown as {
+          command: string;
+          args?: string[];
+          env?: Record<string, string>;
+        },
+      });
     }
 
     // Build allowed tools list from permissions
@@ -62,7 +71,6 @@ export class AgentSdkEngine implements AiEngine {
     if (config.toolPermissions?.allow && config.toolPermissions.allow.length > 0) {
       allowedTools.push(...config.toolPermissions.allow);
     }
-    // Add custom tool patterns if present
     if (config.customTools && config.customTools.length > 0) {
       allowedTools.push("mcp__clawback-custom__*");
     }
@@ -75,18 +83,22 @@ export class AgentSdkEngine implements AiEngine {
     let finalText = "";
 
     try {
+      // Strip CLAUDECODE env var to allow spawning claude CLI from within a Claude Code session
+      const childEnv: Record<string, string | undefined> = { ...process.env };
+      delete childEnv.CLAUDECODE;
+      delete childEnv.CLAUDE_CODE_ENTRYPOINT;
+
       const q = query({
         prompt: initialContent,
         options: {
           systemPrompt: config.systemPrompt ?? undefined,
-          model: config.model,
-          mcpServers: mcpServers as Record<
-            string,
-            { command: string; args: string[]; env?: Record<string, string> }
-          >,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+          mcpServers: mcpServers as any,
           permissionMode: "bypassPermissions",
-          maxTurns: config.maxTurns,
+          allowDangerouslySkipPermissions: true,
+          maxTurns: config.maxTurns ?? 10,
           allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+          env: childEnv,
           abortController,
         },
       });
@@ -96,7 +108,6 @@ export class AgentSdkEngine implements AiEngine {
           const content = message.message?.content;
           if (!content || !Array.isArray(content)) continue;
 
-          // Process text blocks
           const textParts: string[] = [];
           for (const block of content) {
             if (block.type === "text") {
@@ -111,7 +122,6 @@ export class AgentSdkEngine implements AiEngine {
             observer.onText(text);
           }
 
-          // Track assistant message for state reconstruction
           collectedMessages.push({ role: "assistant", content });
         } else if (message.type === "user") {
           const content = message.message?.content;
@@ -121,7 +131,6 @@ export class AgentSdkEngine implements AiEngine {
             if (block.type === "tool_result") {
               const resultText =
                 typeof block.content === "string" ? block.content : JSON.stringify(block.content);
-              // Extract tool name from tool_use_id by finding it in the previous assistant message
               observer.onToolResult(
                 block.tool_use_id,
                 block.tool_use_id,
@@ -131,11 +140,9 @@ export class AgentSdkEngine implements AiEngine {
             }
           }
 
-          // Track tool results for state reconstruction
           collectedMessages.push({ role: "user", content });
         } else if (message.type === "result") {
           if (message.subtype === "success" && message.result) {
-            // Final result text — only add if not already captured
             if (!finalText.includes(message.result)) {
               finalText += message.result;
             }
@@ -172,8 +179,6 @@ export class AgentSdkEngine implements AiEngine {
     onPause: () => void,
     setPauseToolUseId: (id: string) => void
   ) {
-    // Build a Zod schema from JSON Schema properties for the SDK tool() helper.
-    // The tool() function expects a Zod object; we create one from the JSON Schema.
     const properties = ct.inputSchema.properties ?? {};
     const required = new Set(Array.isArray(ct.inputSchema.required) ? ct.inputSchema.required : []);
 
@@ -219,7 +224,6 @@ export class AgentSdkEngine implements AiEngine {
       if (result.type === "pause") {
         setPauseToolUseId(result.toolUseId);
         onPause();
-        // Return a placeholder — abort will stop the loop
         return {
           content: [{ type: "text" as const, text: "Pausing for human input..." }],
         };
@@ -234,7 +238,6 @@ export class AgentSdkEngine implements AiEngine {
 
   /**
    * Convert Anthropic MessageParam[] to a prompt string for the SDK.
-   * The SDK expects a string prompt or async generator; we flatten messages.
    */
   private messagesToPromptContent(messages: Array<{ role: string; content: unknown }>): string {
     const parts: string[] = [];
