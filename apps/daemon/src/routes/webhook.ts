@@ -29,6 +29,14 @@ export function registerWebhookRoutes(server: FastifyInstance, context: ServerCo
         }
       }
 
+      // Fallback: check generic x-event-type header for any source
+      if (eventType === "unknown") {
+        const genericType = request.headers["x-event-type"];
+        if (typeof genericType === "string") {
+          eventType = genericType;
+        }
+      }
+
       // For GitHub, combine event type with action
       if (source === "github" && typeof payload.action === "string") {
         eventType = `${eventType}.${payload.action}`;

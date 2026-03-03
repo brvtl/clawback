@@ -3,6 +3,7 @@ import { browser } from "$app/environment";
 import { api, type ApiNotification } from "$lib/api/client";
 import { checkpointStore } from "./checkpoints";
 import { hitlStore } from "./hitl";
+import { builderStore } from "./builder";
 
 interface NotificationState {
   notifications: ApiNotification[];
@@ -136,6 +137,18 @@ function createNotificationStore() {
                 timeoutAt: req.timeoutAt,
                 createdAt: Date.now(),
               });
+            } else if (data.type === "builder_text" && data.sessionId) {
+              builderStore.appendText(data.sessionId as string, data.text as string);
+            } else if (data.type === "builder_tool_call" && data.sessionId) {
+              builderStore.setToolCall(data.sessionId as string, data.tool as string);
+            } else if (data.type === "builder_tool_result" && data.sessionId) {
+              builderStore.clearToolCall(data.sessionId as string);
+            } else if (data.type === "builder_complete" && data.sessionId) {
+              builderStore.onComplete(data.sessionId as string);
+            } else if (data.type === "builder_error" && data.sessionId) {
+              builderStore.onError(data.sessionId as string, data.error as string);
+            } else if (data.type === "builder_status" && data.sessionId) {
+              builderStore.onStatus(data.sessionId as string, data.status as string);
             }
           } catch (e) {
             console.error("Failed to parse WebSocket message:", e);

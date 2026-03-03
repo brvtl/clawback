@@ -1,4 +1,3 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
   type Skill,
   type Event,
@@ -17,6 +16,7 @@ import type {
 import type { RemoteSkillFetcher } from "../services/remote-skill-fetcher.js";
 import type { SkillReviewer } from "../services/skill-reviewer.js";
 import type { NotificationService } from "../services/notifications.js";
+import type { AiEngine } from "../ai/types.js";
 
 // Default restricted permissions for remote skills
 const REMOTE_SKILL_PERMISSIONS: SharedToolPermissions = {
@@ -28,7 +28,7 @@ const REMOTE_SKILL_PERMISSIONS: SharedToolPermissions = {
 const MODEL_IDS: Record<SkillModel, string> = {
   opus: "claude-opus-4-20250514",
   sonnet: "claude-sonnet-4-20250514",
-  haiku: "claude-haiku-4-20250514",
+  haiku: "claude-haiku-4-5-20251001",
 };
 
 export interface ExecutorDependencies {
@@ -40,7 +40,7 @@ export interface ExecutorDependencies {
   skillReviewer?: SkillReviewer;
   checkpointRepo?: CheckpointRepository;
   notificationService?: NotificationService;
-  anthropicApiKey?: string;
+  engine?: AiEngine;
 }
 
 export interface ToolCallResult {
@@ -67,7 +67,7 @@ export class SkillExecutor {
   private skillReviewer?: SkillReviewer;
   private checkpointRepo?: CheckpointRepository;
   private notificationService?: NotificationService;
-  private anthropicApiKey?: string;
+  private engine?: AiEngine;
 
   constructor(deps: ExecutorDependencies) {
     this.runRepo = deps.runRepo;
@@ -78,10 +78,10 @@ export class SkillExecutor {
     this.skillReviewer = deps.skillReviewer;
     this.checkpointRepo = deps.checkpointRepo;
     this.notificationService = deps.notificationService;
-    this.anthropicApiKey = deps.anthropicApiKey;
+    this.engine = deps.engine;
 
-    if (!deps.anthropicApiKey) {
-      console.log("[SkillExecutor] WARNING: No ANTHROPIC_API_KEY configured - skills will not run");
+    if (!deps.engine) {
+      console.log("[SkillExecutor] WARNING: No AiEngine configured - skills will not run");
     }
   }
 
@@ -253,25 +253,20 @@ export class SkillExecutor {
   }
 
   async runAgentLoop(skill: Skill, event: Event, _run: Run): Promise<AgentLoopResult> {
-    if (!this.anthropicApiKey) {
+    if (!this.engine) {
       return {
-        output: { message: "No API key configured" },
+        output: { message: "No AI engine configured" },
         toolCalls: [],
       };
     }
 
-    // Build MCP server configs from skill settings
     const mcpServers = this.buildMcpServersConfig(skill);
-
     const systemPrompt = this.buildSystemPrompt(skill, event);
-    const toolCalls: ToolCallResult[] = [];
-
-    // Build the full prompt
     const eventPayload = (
       typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
     ) as Record<string, unknown>;
 
-    const fullPrompt = `${systemPrompt}
+    const userMessage = `${systemPrompt}
 
 ---
 
@@ -283,70 +278,65 @@ ${JSON.stringify(eventPayload, null, 2)}
 
     const modelId = MODEL_IDS[skill.model ?? "sonnet"];
     console.log(
-      `[SkillExecutor] Running skill "${skill.name}" with model ${skill.model ?? "sonnet"} (${modelId}) and ${Object.keys(mcpServers).length} MCP servers`
+      `[SkillExecutor] Running skill "${skill.name}" with model ${skill.model ?? "sonnet"} (${modelId}) and ${Object.keys(mcpServers).length} MCP server(s)`
     );
 
-    let finalResponse = "";
+    let cpSequence = 0;
+    const toolCalls: ToolCallResult[] = [];
 
-    try {
-      // Use the Claude Agent SDK for execution with MCP tools
-      const q = query({
-        prompt: fullPrompt,
-        options: {
-          model: modelId,
-          maxTurns: 20,
-          // Allow all MCP tools without prompting for permissions
-          permissionMode: "bypassPermissions",
-          allowDangerouslySkipPermissions: true,
-          mcpServers,
+    const result = await this.engine.runLoop(
+      {
+        model: modelId,
+        messages: [{ role: "user", content: userMessage }],
+        mcpServers,
+        toolPermissions: skill.toolPermissions
+          ? { allow: skill.toolPermissions.allow, deny: skill.toolPermissions.deny }
+          : undefined,
+      },
+      {
+        onText: (text) => {
+          this.saveCheckpoint(_run.id, cpSequence++, "assistant_message", { text });
         },
-      });
-
-      let cpSequence = 0;
-
-      for await (const msg of q) {
-        if (msg.type === "assistant") {
-          const content = (msg as { message: { content: unknown } }).message.content;
-          if (Array.isArray(content)) {
-            for (const block of content as Array<{
-              type: string;
-              text?: string;
-              name?: string;
-              input?: unknown;
-              id?: string;
-            }>) {
-              if (block.type === "text" && block.text) {
-                finalResponse += block.text;
-                this.saveCheckpoint(_run.id, cpSequence++, "assistant_message", {
-                  text: block.text,
-                });
-              } else if (block.type === "tool_use") {
-                this.saveCheckpoint(_run.id, cpSequence++, "tool_call", {
-                  toolName: block.name,
-                  toolInput: block.input,
-                  toolUseId: block.id,
-                });
-              }
+        onToolCall: (toolName, toolInput, toolUseId) => {
+          this.saveCheckpoint(_run.id, cpSequence++, "tool_call", {
+            toolName,
+            toolInput,
+            toolUseId,
+          });
+          // Track tool call start for timing
+          toolCalls.push({
+            id: toolUseId,
+            name: toolName,
+            input: toolInput as Record<string, unknown>,
+            output: null,
+            error: null,
+            startedAt: new Date(),
+            completedAt: new Date(),
+          });
+        },
+        onToolResult: (toolName, toolUseId, resultText, isError) => {
+          this.saveCheckpoint(_run.id, cpSequence++, "tool_result", {
+            toolName,
+            toolUseId,
+            result: resultText,
+            isError,
+          });
+          // Update matching tool call with result
+          const tc = toolCalls.find((t) => t.id === toolUseId);
+          if (tc) {
+            tc.completedAt = new Date();
+            if (isError) {
+              tc.error = resultText;
+            } else {
+              tc.output = this.tryParseJson(resultText);
             }
           }
-        } else if (msg.type === "result") {
-          const resultMsg = msg as { result?: unknown };
-          if (resultMsg.result) {
-            finalResponse = String(resultMsg.result);
-            this.saveCheckpoint(_run.id, cpSequence++, "tool_result", {
-              result: resultMsg.result,
-            });
-          }
-        }
+        },
       }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Agent execution failed";
-      console.error(`[SkillExecutor] Error running skill "${skill.name}":`, errorMessage);
-      throw error;
-    }
+    );
 
     return {
-      output: { response: finalResponse },
+      output: result.finalText ? { response: result.finalText } : { message: "No response" },
       toolCalls,
     };
   }
@@ -357,13 +347,10 @@ ${JSON.stringify(eventPayload, null, 2)}
    */
   private buildMcpServersConfig(
     skill: Skill
-  ): Record<
-    string,
-    { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }
-  > {
+  ): Record<string, { command: string; args: string[]; env?: Record<string, string> }> {
     const mcpServers: Record<
       string,
-      { type: "stdio"; command: string; args: string[]; env?: Record<string, string> }
+      { command: string; args: string[]; env?: Record<string, string> }
     > = {};
 
     if (!skill.mcpServers) {
@@ -385,7 +372,6 @@ ${JSON.stringify(eventPayload, null, 2)}
       // Object with inline configs
       for (const [name, config] of Object.entries(skill.mcpServers)) {
         mcpServers[name] = {
-          type: "stdio",
           command: config.command,
           args: Array.isArray(config.args) ? config.args : [],
           env: config.env,
@@ -401,17 +387,23 @@ ${JSON.stringify(eventPayload, null, 2)}
    * Convert a database MCP server record to SDK config format.
    */
   private toSdkServerConfig(server: McpServer): {
-    type: "stdio";
     command: string;
     args: string[];
     env?: Record<string, string>;
   } {
     return {
-      type: "stdio",
       command: server.command,
       args: Array.isArray(server.args) ? server.args : [],
       env: server.env ?? undefined,
     };
+  }
+
+  private tryParseJson(text: string): Record<string, unknown> | null {
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return { text };
+    }
   }
 
   private saveCheckpoint(

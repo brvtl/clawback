@@ -7,3 +7,4 @@ export * from "./scheduled-job.repository.js";
 export * from "./workflow.repository.js";
 export * from "./checkpoint.repository.js";
 export * from "./hitl-request.repository.js";
+export * from "./builder-session.repository.js";

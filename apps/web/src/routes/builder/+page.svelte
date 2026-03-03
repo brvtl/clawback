@@ -1,190 +1,25 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { api, type ApiSkill, type ApiMcpServer, type ApiWorkflow } from "$lib/api/client";
+  import { onMount, tick } from "svelte";
+  import { builderStore } from "$lib/stores/builder";
 
-  interface Message {
-    role: "user" | "assistant";
-    content: string;
-  }
-
-  let messages: Message[] = [];
   let input = "";
-  let loading = false;
-  let skills: ApiSkill[] = [];
-  let workflows: ApiWorkflow[] = [];
-  let mcpServers: ApiMcpServer[] = [];
+  let chatContainer: HTMLDivElement;
 
   onMount(async () => {
-    await loadContext();
-    // Add welcome message
-    messages = [
-      {
-        role: "assistant",
-        content: `Welcome to the Automation Builder! I can help you:
-
-- **Create skills** - Single-purpose automations with MCP tools
-- **Create workflows** - AI-orchestrated multi-skill automations
-- **Configure MCP servers** - Set up GitHub, Slack, or other integrations
-- **Update existing automations** - Modify triggers, instructions, or permissions
-
-What would you like to build today?`,
-      },
-    ];
+    // Restore existing session from localStorage
+    const storedId = builderStore.getStoredSessionId();
+    if (storedId) {
+      await builderStore.loadSession(storedId);
+    }
   });
 
-  async function loadContext() {
-    try {
-      const [skillsRes, workflowsRes, serversRes] = await Promise.all([
-        api.getSkills(),
-        api.getWorkflows(),
-        api.getMcpServers(),
-      ]);
-      skills = skillsRes.skills;
-      workflows = workflowsRes.workflows;
-      mcpServers = serversRes.servers;
-    } catch (e) {
-      console.error("Failed to load context:", e);
-    }
-  }
-
   async function sendMessage() {
-    if (!input.trim() || loading) return;
+    const message = input.trim();
+    if (!message || $builderStore.loading) return;
 
-    const userMessage = input.trim();
     input = "";
-    messages = [...messages, { role: "user", content: userMessage }];
-    loading = true;
-
-    try {
-      // Build context about current state
-      const context = buildContext();
-
-      // Call the builder API
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL ?? "http://localhost:3000"}/api/builder/chat`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: userMessage,
-            context,
-            history: messages.slice(-10), // Last 10 messages for context
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-
-      const data = (await response.json()) as { response: string; actions?: Action[] };
-
-      // Build response with action summary
-      let responseText = data.response;
-      if (data.actions && data.actions.length > 0) {
-        responseText += "\n\n---\n*Actions executed:*\n";
-        for (const action of data.actions) {
-          const name = action.data.name as string | undefined;
-          responseText += `- ${formatActionType(action.type)}${name ? `: ${name}` : ""}\n`;
-        }
-      }
-
-      messages = [...messages, { role: "assistant", content: responseText }];
-
-      // Reload context after actions
-      await loadContext();
-    } catch (e) {
-      messages = [
-        ...messages,
-        {
-          role: "assistant",
-          content: `Sorry, I encountered an error: ${e instanceof Error ? e.message : "Unknown error"}`,
-        },
-      ];
-    } finally {
-      loading = false;
-    }
-  }
-
-  interface Action {
-    type:
-      | "create_skill"
-      | "update_skill"
-      | "create_mcp_server"
-      | "update_mcp_server"
-      | "create_workflow"
-      | "update_workflow"
-      | "trigger_workflow";
-    data: Record<string, unknown>;
-  }
-
-  function formatActionType(type: Action["type"]): string {
-    switch (type) {
-      case "create_skill":
-        return "Created skill";
-      case "update_skill":
-        return "Updated skill";
-      case "create_mcp_server":
-        return "Created MCP server";
-      case "update_mcp_server":
-        return "Updated MCP server";
-      case "create_workflow":
-        return "Created workflow";
-      case "update_workflow":
-        return "Updated workflow";
-      case "trigger_workflow":
-        return "Triggered workflow";
-    }
-  }
-
-  function buildContext(): string {
-    const lines: string[] = [];
-
-    lines.push("## Current Skills");
-    if (skills.length === 0) {
-      lines.push("No skills configured yet.");
-    } else {
-      for (const skill of skills) {
-        lines.push(`- **${skill.name}** (${skill.id}) [model: ${skill.model ?? "sonnet"}]`);
-        lines.push(
-          `  Triggers: ${skill.triggers.map((t) => `${t.source}:${t.events?.join(",") ?? "*"}`).join(", ")}`
-        );
-        if (skill.mcpServers) {
-          const servers = Array.isArray(skill.mcpServers)
-            ? skill.mcpServers.join(", ")
-            : Object.keys(skill.mcpServers).join(", ");
-          lines.push(`  MCP Servers: ${servers || "none"}`);
-        }
-      }
-    }
-
-    lines.push("");
-    lines.push("## Current Workflows");
-    if (workflows.length === 0) {
-      lines.push("No workflows configured yet.");
-    } else {
-      for (const workflow of workflows) {
-        const status = workflow.enabled ? "enabled" : "disabled";
-        lines.push(`- **${workflow.name}** (${workflow.id}) [${status}]`);
-        lines.push(
-          `  Triggers: ${workflow.triggers.map((t) => `${t.source}:${t.events?.join(",") ?? "*"}`).join(", ")}`
-        );
-        lines.push(`  Skills: ${workflow.skills.length} | Model: ${workflow.orchestratorModel}`);
-      }
-    }
-
-    lines.push("");
-    lines.push("## Available MCP Servers");
-    if (mcpServers.length === 0) {
-      lines.push("No MCP servers configured. User needs to add credentials in Settings.");
-    } else {
-      for (const server of mcpServers) {
-        const status = server.enabled ? "enabled" : "disabled";
-        lines.push(`- **${server.name}** (${status}): ${server.command} ${server.args.join(" ")}`);
-      }
-    }
-
-    return lines.join("\n");
+    await builderStore.sendMessage(message);
+    await scrollToBottom();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -192,6 +27,22 @@ What would you like to build today?`,
       e.preventDefault();
       void sendMessage();
     }
+  }
+
+  function startNewChat() {
+    builderStore.newSession();
+  }
+
+  async function scrollToBottom() {
+    await tick();
+    if (chatContainer) {
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+  }
+
+  // Auto-scroll when messages or loading state changes
+  $: if ($builderStore.messages.length || $builderStore.loading || $builderStore.currentToolCall) {
+    void scrollToBottom();
   }
 </script>
 
@@ -202,14 +53,48 @@ What would you like to build today?`,
 <div class="flex flex-col h-[calc(100vh-2rem)] p-4">
   <div class="flex items-center justify-between mb-4">
     <h1 class="text-2xl font-bold">Automation Builder</h1>
-    <div class="text-sm text-gray-400">
-      {skills.length} skills | {workflows.length} workflows | {mcpServers.length} MCP servers
+    <div class="flex items-center gap-3">
+      {#if $builderStore.sessionId}
+        <span class="text-xs text-gray-500 font-mono">{$builderStore.sessionId}</span>
+      {/if}
+      <button
+        on:click={startNewChat}
+        class="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+      >
+        New Chat
+      </button>
     </div>
   </div>
 
   <!-- Chat messages -->
-  <div class="flex-1 overflow-y-auto space-y-4 mb-4 bg-gray-900 rounded-lg p-4">
-    {#each messages as message}
+  <div
+    bind:this={chatContainer}
+    class="flex-1 overflow-y-auto space-y-4 mb-4 bg-gray-900 rounded-lg p-4"
+  >
+    {#if $builderStore.messages.length === 0 && !$builderStore.loading}
+      <div class="flex justify-start">
+        <div class="max-w-[80%] rounded-lg p-4 bg-gray-800 text-gray-100">
+          <div class="prose prose-invert prose-sm max-w-none">
+            <p>Welcome to the Automation Builder! I can help you:</p>
+            <ul>
+              <li><strong>Create skills</strong> - Single-purpose automations with MCP tools</li>
+              <li>
+                <strong>Create workflows</strong> - AI-orchestrated multi-skill automations
+              </li>
+              <li>
+                <strong>Configure MCP servers</strong> - Set up GitHub, Slack, or other integrations
+              </li>
+              <li>
+                <strong>Update existing automations</strong> - Modify triggers, instructions, or permissions
+              </li>
+            </ul>
+            <p>What would you like to build today?</p>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#each $builderStore.messages as message}
       <div class="flex {message.role === 'user' ? 'justify-end' : 'justify-start'}">
         <div
           class="max-w-[80%] rounded-lg p-4 {message.role === 'user'
@@ -231,10 +116,29 @@ What would you like to build today?`,
       </div>
     {/each}
 
-    {#if loading}
+    {#if $builderStore.currentToolCall}
+      <div class="flex justify-start">
+        <div class="bg-gray-800 rounded-lg p-3 text-gray-400 text-sm flex items-center gap-2">
+          <span
+            class="animate-spin inline-block w-4 h-4 border-2 border-gray-500 border-t-blue-400 rounded-full"
+          ></span>
+          Calling
+          <code class="bg-gray-700 px-1 rounded text-blue-300">{$builderStore.currentToolCall}</code
+          >...
+        </div>
+      </div>
+    {:else if $builderStore.loading}
       <div class="flex justify-start">
         <div class="bg-gray-800 rounded-lg p-4 text-gray-400">
           <span class="animate-pulse">Thinking...</span>
+        </div>
+      </div>
+    {/if}
+
+    {#if $builderStore.error}
+      <div class="flex justify-start">
+        <div class="bg-red-900/50 border border-red-700 rounded-lg p-4 text-red-300 text-sm">
+          Error: {$builderStore.error}
         </div>
       </div>
     {/if}
@@ -247,11 +151,12 @@ What would you like to build today?`,
       on:keydown={handleKeydown}
       placeholder="Describe what you want to build..."
       rows="2"
-      class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white resize-none focus:outline-none focus:border-blue-500"
+      disabled={$builderStore.loading}
+      class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white resize-none focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
     ></textarea>
     <button
       on:click={sendMessage}
-      disabled={loading || !input.trim()}
+      disabled={$builderStore.loading || !input.trim()}
       class="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg transition-colors"
     >
       Send

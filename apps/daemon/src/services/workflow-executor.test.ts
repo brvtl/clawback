@@ -12,18 +12,7 @@ import type {
 import type { SkillExecutor } from "../skills/executor.js";
 import type { NotificationService } from "./notifications.js";
 import type { Workflow, WorkflowRun, Event, Skill } from "@clawback/shared";
-
-// Mock Anthropic before any imports that reference it
-vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    messages: {
-      create: vi.fn(),
-    },
-  })),
-}));
-
-// Import after mock is set up so we can access the mock instance
-import Anthropic from "@anthropic-ai/sdk";
+import type { AiEngine, LoopConfig, LoopObserver, LoopResult } from "../ai/types.js";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -101,10 +90,107 @@ const savedMessages = [
 ];
 
 // ---------------------------------------------------------------------------
+// Helper: create mock engine that simulates tool calls
+// ---------------------------------------------------------------------------
+
+function createMockEngine(
+  behavior: "hitl" | "complete" | "complete_after_resume" = "complete"
+): AiEngine {
+  return {
+    runLoop: vi
+      .fn()
+      .mockImplementation(
+        async (config: LoopConfig, observer: LoopObserver): Promise<LoopResult> => {
+          if (behavior === "hitl") {
+            // Simulate: orchestrator calls request_human_input → engine pauses
+            observer.onToolCall(
+              "request_human_input",
+              {
+                prompt: "Should I proceed with deployment?",
+                context: "Changes look risky",
+                options: ["Yes", "No"],
+                timeout_minutes: 30,
+              },
+              "toolu_hitl01"
+            );
+
+            // Find the request_human_input handler and call it
+            const hitlTool = config.customTools?.find((t) => t.name === "request_human_input");
+            if (hitlTool) {
+              await hitlTool.handler({
+                prompt: "Should I proceed with deployment?",
+                context: "Changes look risky",
+                options: ["Yes", "No"],
+                timeout_minutes: 30,
+              });
+            }
+
+            return {
+              finalText: "",
+              messages: [
+                ...config.messages,
+                {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "tool_use",
+                      id: "toolu_hitl01",
+                      name: "request_human_input",
+                      input: {
+                        prompt: "Should I proceed with deployment?",
+                        context: "Changes look risky",
+                        options: ["Yes", "No"],
+                        timeout_minutes: 30,
+                      },
+                    },
+                  ],
+                },
+              ],
+              paused: true,
+              pauseToolUseId: "toolu_hitl01",
+            };
+          }
+
+          // "complete" or "complete_after_resume": orchestrator calls complete_workflow
+          observer.onToolCall(
+            "complete_workflow",
+            {
+              summary:
+                behavior === "complete_after_resume" ? "Deployment approved by human" : "Completed",
+            },
+            "toolu_complete01"
+          );
+
+          // Call the complete_workflow handler
+          const completeTool = config.customTools?.find((t) => t.name === "complete_workflow");
+          if (completeTool) {
+            await completeTool.handler({
+              summary:
+                behavior === "complete_after_resume" ? "Deployment approved by human" : "Completed",
+            });
+          }
+
+          observer.onToolResult(
+            "complete_workflow",
+            "toolu_complete01",
+            JSON.stringify({ success: true }),
+            false
+          );
+
+          return {
+            finalText: "",
+            messages: config.messages,
+          };
+        }
+      ),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Helper: build mock deps
 // ---------------------------------------------------------------------------
 
-function buildMockDeps() {
+function buildMockDeps(engineBehavior?: "hitl" | "complete" | "complete_after_resume") {
   const mockCheckpoint = {
     id: "cp_test01",
     workflowRunId: testWorkflowRun.id,
@@ -176,6 +262,8 @@ function buildMockDeps() {
     sendDesktopNotification: vi.fn().mockResolvedValue(undefined),
   };
 
+  const engine = createMockEngine(engineBehavior ?? "complete");
+
   return {
     workflowRepo: workflowRepo as WorkflowRepository,
     skillRepo: skillRepo as SkillRepository,
@@ -185,6 +273,7 @@ function buildMockDeps() {
     checkpointRepo: checkpointRepo as CheckpointRepository,
     hitlRequestRepo: hitlRequestRepo as HitlRequestRepository,
     notificationService: notificationService as NotificationService,
+    engine,
     mockCheckpoint,
     mockHitlRequest,
   };
@@ -195,15 +284,8 @@ function buildMockDeps() {
 // ---------------------------------------------------------------------------
 
 describe("WorkflowExecutor - HITL and checkpointing", () => {
-  let mockAnthropicCreate: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    // Grab the mocked create fn from the singleton Anthropic instance
-    const AnthropicMock = vi.mocked(Anthropic);
-    // Reset the constructor mock so each test gets a fresh mock instance
-    AnthropicMock.mockClear();
-    // We will capture the create fn after executor construction in each test
   });
 
   // -------------------------------------------------------------------------
@@ -212,36 +294,8 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
 
   describe("handleHitlRequest (via execute)", () => {
     it("creates a hitl_request checkpoint with full message state", async () => {
-      const deps = buildMockDeps();
-
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
-
-      // Get the Anthropic instance that was created inside the constructor
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      // Orchestrator returns request_human_input tool call
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_hitl01",
-            name: "request_human_input",
-            input: {
-              prompt: "Should I proceed with deployment?",
-              context: "Changes look risky",
-              options: ["Yes", "No"],
-              timeout_minutes: 30,
-            },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+      const deps = buildMockDeps("hitl");
+      const executor = new WorkflowExecutor(deps);
 
       await executor.execute(testWorkflow, testEvent);
 
@@ -264,33 +318,8 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("creates a HITL request record with prompt, context, and options", async () => {
-      const deps = buildMockDeps();
-
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
-
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_hitl01",
-            name: "request_human_input",
-            input: {
-              prompt: "Should I proceed with deployment?",
-              context: "Changes look risky",
-              options: ["Yes", "No"],
-            },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+      const deps = buildMockDeps("hitl");
+      const executor = new WorkflowExecutor(deps);
 
       await executor.execute(testWorkflow, testEvent);
 
@@ -305,29 +334,8 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("sets workflow run status to waiting_for_input", async () => {
-      const deps = buildMockDeps();
-
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
-
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_hitl01",
-            name: "request_human_input",
-            input: { prompt: "Proceed?" },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+      const deps = buildMockDeps("hitl");
+      const executor = new WorkflowExecutor(deps);
 
       await executor.execute(testWorkflow, testEvent);
 
@@ -338,29 +346,8 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("returns a run with status waiting_for_input", async () => {
-      const deps = buildMockDeps();
-
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
-
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_hitl01",
-            name: "request_human_input",
-            input: { prompt: "Proceed?" },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+      const deps = buildMockDeps("hitl");
+      const executor = new WorkflowExecutor(deps);
 
       const result = await executor.execute(testWorkflow, testEvent);
 
@@ -368,9 +355,39 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("falls back gracefully when HITL repos are not configured", async () => {
-      const deps = buildMockDeps();
+      // Create engine that simulates HITL but the handler returns error (no repos)
+      const engine: AiEngine = {
+        runLoop: vi
+          .fn()
+          .mockImplementation(
+            async (config: LoopConfig, observer: LoopObserver): Promise<LoopResult> => {
+              // First call: HITL request but handler returns error (no repos)
+              const hitlTool = config.customTools?.find((t) => t.name === "request_human_input");
+              if (hitlTool) {
+                const result = await hitlTool.handler({ prompt: "Proceed?" });
+                // Without repos, handler returns result with error, not pause
+                if (result.type === "result") {
+                  observer.onToolResult(
+                    "request_human_input",
+                    "toolu_hitl01",
+                    result.content,
+                    true
+                  );
+                }
+              }
 
-      // Executor without HITL repos
+              // Engine continues and calls complete_workflow
+              const completeTool = config.customTools?.find((t) => t.name === "complete_workflow");
+              if (completeTool) {
+                await completeTool.handler({ summary: "Completed without HITL" });
+              }
+
+              return { finalText: "", messages: config.messages };
+            }
+          ),
+      };
+
+      const deps = buildMockDeps("complete");
       const executor = new WorkflowExecutor({
         workflowRepo: deps.workflowRepo,
         skillRepo: deps.skillRepo,
@@ -378,39 +395,8 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
         runRepo: deps.runRepo,
         skillExecutor: deps.skillExecutor,
         notificationService: deps.notificationService,
-        anthropicApiKey: "test-key",
+        engine,
         // No checkpointRepo or hitlRequestRepo
-      });
-
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      // First call: orchestrator asks for human input
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_hitl01",
-            name: "request_human_input",
-            input: { prompt: "Proceed?" },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
-
-      // Second call: orchestrator completes after HITL fallback error result
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_complete01",
-            name: "complete_workflow",
-            input: { summary: "Completed without HITL" },
-          },
-        ],
-        stop_reason: "tool_use",
       });
 
       const result = await executor.execute(testWorkflow, testEvent);
@@ -426,7 +412,7 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
 
   describe("resumeFromCheckpoint", () => {
     it("throws when the HITL request has not been responded to", async () => {
-      const deps = buildMockDeps();
+      const deps = buildMockDeps("complete_after_resume");
 
       // Override: request is still pending
       vi.mocked(deps.hitlRequestRepo.findById).mockReturnValue({
@@ -434,10 +420,7 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
         status: "pending",
       });
 
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
+      const executor = new WorkflowExecutor(deps);
 
       await expect(executor.resumeFromCheckpoint("hitl_test01")).rejects.toThrow(
         "has not been responded to"
@@ -445,64 +428,37 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("throws when the HITL request does not exist", async () => {
-      const deps = buildMockDeps();
+      const deps = buildMockDeps("complete_after_resume");
 
       vi.mocked(deps.hitlRequestRepo.findById).mockReturnValue(undefined);
 
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
+      const executor = new WorkflowExecutor(deps);
 
       await expect(executor.resumeFromCheckpoint("hitl_missing")).rejects.toThrow("not found");
     });
 
     it("throws when the checkpoint is missing", async () => {
-      const deps = buildMockDeps();
+      const deps = buildMockDeps("complete_after_resume");
 
       vi.mocked(deps.checkpointRepo.findById).mockReturnValue(undefined);
 
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
+      const executor = new WorkflowExecutor(deps);
 
       await expect(executor.resumeFromCheckpoint("hitl_test01")).rejects.toThrow(
         "not found or has no state"
       );
     });
 
-    it("restores saved messages and appends the human response before calling Anthropic", async () => {
-      const deps = buildMockDeps();
-
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
-
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      // Orchestrator completes after resume
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_complete01",
-            name: "complete_workflow",
-            input: { summary: "Deployment approved by human" },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+    it("restores saved messages and appends the human response before calling engine", async () => {
+      const deps = buildMockDeps("complete_after_resume");
+      const executor = new WorkflowExecutor(deps);
 
       await executor.resumeFromCheckpoint("hitl_test01");
 
-      expect(mockAnthropicCreate).toHaveBeenCalledTimes(1);
+      expect(deps.engine.runLoop).toHaveBeenCalledTimes(1);
 
-      const callArgs = mockAnthropicCreate.mock.calls[0][0] as { messages: unknown[] };
+      const callArgs = (deps.engine.runLoop as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as LoopConfig;
       const messages = callArgs.messages;
 
       // Should include the saved messages plus the appended tool_result with human response
@@ -524,29 +480,8 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("sets status back to running before resuming the orchestrator loop", async () => {
-      const deps = buildMockDeps();
-
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
-
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_complete01",
-            name: "complete_workflow",
-            input: { summary: "Done" },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+      const deps = buildMockDeps("complete_after_resume");
+      const executor = new WorkflowExecutor(deps);
 
       await executor.resumeFromCheckpoint("hitl_test01");
 
@@ -554,29 +489,8 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("sets status to completed after the orchestrator calls complete_workflow", async () => {
-      const deps = buildMockDeps();
-
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
-
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_complete01",
-            name: "complete_workflow",
-            input: { summary: "Deployment approved and completed" },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+      const deps = buildMockDeps("complete_after_resume");
+      const executor = new WorkflowExecutor(deps);
 
       const result = await executor.resumeFromCheckpoint("hitl_test01");
 
@@ -589,7 +503,7 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("returns waiting_for_input if the resumed orchestrator requests another HITL", async () => {
-      const deps = buildMockDeps();
+      const deps = buildMockDeps("complete_after_resume");
 
       // Second HITL checkpoint and request
       const secondCheckpoint = {
@@ -606,28 +520,49 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
       vi.mocked(deps.checkpointRepo.create).mockReturnValue(secondCheckpoint);
       vi.mocked(deps.hitlRequestRepo.create).mockReturnValue(secondHitlRequest);
 
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
+      // Override engine to pause again
+      deps.engine.runLoop = vi
+        .fn()
+        .mockImplementation(
+          async (config: LoopConfig, observer: LoopObserver): Promise<LoopResult> => {
+            observer.onToolCall(
+              "request_human_input",
+              {
+                prompt: "Which region should I deploy to?",
+              },
+              "toolu_hitl02"
+            );
 
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
+            const hitlTool = config.customTools?.find((t) => t.name === "request_human_input");
+            if (hitlTool) {
+              await hitlTool.handler({
+                prompt: "Which region should I deploy to?",
+              });
+            }
 
-      // After resume, orchestrator immediately requests another human input
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_hitl02",
-            name: "request_human_input",
-            input: { prompt: "Which region should I deploy to?" },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+            return {
+              finalText: "",
+              messages: [
+                ...config.messages,
+                {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "tool_use",
+                      id: "toolu_hitl02",
+                      name: "request_human_input",
+                      input: { prompt: "Which region should I deploy to?" },
+                    },
+                  ],
+                },
+              ],
+              paused: true,
+              pauseToolUseId: "toolu_hitl02",
+            };
+          }
+        );
+
+      const executor = new WorkflowExecutor(deps);
 
       const result = await executor.resumeFromCheckpoint("hitl_test01");
 
@@ -635,29 +570,8 @@ describe("WorkflowExecutor - HITL and checkpointing", () => {
     });
 
     it("saves a hitl_response checkpoint before resuming the loop", async () => {
-      const deps = buildMockDeps();
-
-      const executor = new WorkflowExecutor({
-        ...deps,
-        anthropicApiKey: "test-key",
-      });
-
-      const anthropicInstance = vi.mocked(Anthropic).mock.results[0].value as {
-        messages: { create: ReturnType<typeof vi.fn> };
-      };
-      mockAnthropicCreate = anthropicInstance.messages.create;
-
-      mockAnthropicCreate.mockResolvedValueOnce({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_complete01",
-            name: "complete_workflow",
-            input: { summary: "Done" },
-          },
-        ],
-        stop_reason: "tool_use",
-      });
+      const deps = buildMockDeps("complete_after_resume");
+      const executor = new WorkflowExecutor(deps);
 
       await executor.resumeFromCheckpoint("hitl_test01");
 

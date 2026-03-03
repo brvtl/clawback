@@ -62,6 +62,7 @@ export const skills = sqliteTable("skills", {
   reviewResult: text("review_result"), // JSON with review details
   // Model selection
   model: text("model", { enum: ["opus", "sonnet", "haiku"] }).default("sonnet"),
+  isBuiltin: integer("is_builtin", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
@@ -105,6 +106,7 @@ export const workflows = sqliteTable("workflows", {
     .notNull()
     .default("opus"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  isBuiltin: integer("is_builtin", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
@@ -177,12 +179,23 @@ export const hitlRequests = sqliteTable("hitl_requests", {
   respondedAt: integer("responded_at", { mode: "number" }),
 });
 
+// Builder Sessions table - persistent AI builder chat sessions
+export const builderSessions = sqliteTable("builder_sessions", {
+  id: text("id").primaryKey(),
+  status: text("status", { enum: ["active", "processing", "completed", "error"] })
+    .notNull()
+    .default("active"),
+  messages: text("messages").notNull().default("[]"), // JSON: Anthropic.MessageParam[]
+  title: text("title"),
+  lastError: text("last_error"),
+  createdAt: integer("created_at", { mode: "number" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
 // Notifications table - user notifications
 export const notifications = sqliteTable("notifications", {
   id: text("id").primaryKey(),
-  runId: text("run_id")
-    .notNull()
-    .references(() => runs.id),
+  runId: text("run_id").notNull(),
   skillId: text("skill_id").notNull(),
   type: text("type", { enum: ["success", "error", "info", "warning"] }).notNull(),
   title: text("title").notNull(),
@@ -221,3 +234,6 @@ export type NewCheckpoint = typeof checkpoints.$inferInsert;
 
 export type HitlRequest = typeof hitlRequests.$inferSelect;
 export type NewHitlRequest = typeof hitlRequests.$inferInsert;
+
+export type BuilderSession = typeof builderSessions.$inferSelect;
+export type NewBuilderSession = typeof builderSessions.$inferInsert;
