@@ -19,9 +19,16 @@ packages/db/           - Drizzle ORM, SQLite, repositories
 packages/mcp-server/   - Clawback MCP server for external tool access
 ```
 
-## Subagents
+## Subagents (MANDATORY for implementation)
 
-Use these subagents (via `Agent` tool with matching agent files in `.claude/agents/`) to keep the main context window clean. Each agent knows its domain's files, patterns, and conventions.
+**Always delegate implementation work to the appropriate subagent.** The main context window should be used for planning, coordination, and verification — not for reading/writing code directly. Each subagent (`.claude/agents/`) knows its domain's files, patterns, and conventions.
+
+**Rules:**
+
+- For ANY code change, delegate to the matching subagent below
+- For cross-domain changes, spawn multiple subagents in parallel (one per domain)
+- Only read/write code in the main context for trivial single-line fixes or when no subagent matches
+- Give each subagent a clear, complete task description — it runs independently
 
 | Agent        | Domain                                                    | Use when                                                              |
 | ------------ | --------------------------------------------------------- | --------------------------------------------------------------------- |
