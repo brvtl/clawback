@@ -33,16 +33,16 @@ describe("seedBuilderSkills", () => {
   it("skills exist in DB after seeding", () => {
     seedBuilderSkills(skillRepo);
     for (const name of EXPECTED_SKILL_NAMES) {
-      const skill = skillRepo.findSystem(name);
+      const skill = skillRepo.findBuiltin(name);
       expect(skill).toBeDefined();
     }
   });
 
-  it("skills are marked as system", () => {
+  it("skills are marked as built-in", () => {
     seedBuilderSkills(skillRepo);
     for (const name of EXPECTED_SKILL_NAMES) {
-      const skill = skillRepo.findSystem(name);
-      expect(skill!.system).toBe(true);
+      const skill = skillRepo.findBuiltin(name);
+      expect(skill!.isBuiltin).toBe(true);
     }
   });
 
@@ -63,17 +63,17 @@ describe("seedBuilderSkills", () => {
 
     // Manually overwrite instructions
     skillRepo.update(id, { instructions: "custom instructions overwrite" });
-    const modified = skillRepo.findSystem(targetName);
+    const modified = skillRepo.findBuiltin(targetName);
     expect(modified!.instructions).toBe("custom instructions overwrite");
 
     // Re-seed should restore original instructions
     seedBuilderSkills(skillRepo);
-    const restored = skillRepo.findSystem(targetName);
+    const restored = skillRepo.findBuiltin(targetName);
     expect(restored!.instructions).not.toBe("custom instructions overwrite");
     expect(restored!.instructions.length).toBeGreaterThan(0);
   });
 
-  it("system skills cannot be deleted", () => {
+  it("built-in skills cannot be deleted", () => {
     const skillMap = seedBuilderSkills(skillRepo);
     for (const name of EXPECTED_SKILL_NAMES) {
       const id = skillMap.get(name)!;

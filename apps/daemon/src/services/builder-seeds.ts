@@ -358,9 +358,9 @@ export function seedBuilderSkills(skillRepo: SkillRepository): Map<string, strin
   const skillMap = new Map<string, string>();
 
   for (const def of BUILDER_SKILLS) {
-    let skill = skillRepo.findSystem(def.name);
+    let skill = skillRepo.findBuiltin(def.name);
     if (!skill) {
-      skill = skillRepo.createSystem({
+      skill = skillRepo.createBuiltin({
         name: def.name,
         description: def.description,
         instructions: def.instructions,
@@ -368,7 +368,7 @@ export function seedBuilderSkills(skillRepo: SkillRepository): Map<string, strin
         toolPermissions: def.toolPermissions,
         model: def.model,
       });
-      console.log(`[BuilderSeeds] Created system skill: ${def.name} (${skill.id})`);
+      console.log(`[BuilderSeeds] Created built-in skill: ${def.name} (${skill.id})`);
     } else {
       // Update instructions/config if changed (idempotent)
       skillRepo.update(skill.id, {

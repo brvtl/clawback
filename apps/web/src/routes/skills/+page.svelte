@@ -47,10 +47,10 @@
         >
           <div class="flex items-center gap-2 mb-2">
             <h3 class="text-lg font-semibold">{skill.name}</h3>
-            {#if skill.system}
+            {#if skill.isBuiltin}
               <span
                 class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30"
-                >System</span
+                >Built-in</span
               >
             {/if}
           </div>

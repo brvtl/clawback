@@ -110,22 +110,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     console.log(`[Server] Seeded Clawback MCP server: ${clawbackMcp.id}`);
   }
 
-  // Seed builder system skills (before registry load so they're cached)
+  // Seed built-in builder skills (before registry load so they're cached)
   const builderSkillMap = seedBuilderSkills(skillRepo);
   const builderSkillIds = Array.from(builderSkillMap.values());
-  console.log(`[Server] Builder system skills ready: ${builderSkillIds.length} skills`);
+  console.log(`[Server] Built-in builder skills ready: ${builderSkillIds.length} skills`);
 
-  // Bootstrap system builder workflow
-  let builderWorkflow = workflowRepo.findSystem("AI Builder");
+  // Bootstrap built-in builder workflow
+  let builderWorkflow = workflowRepo.findBuiltin("AI Builder");
   const builderInstructions = getBuilderOrchestratorInstructions(builderSkillMap);
   if (!builderWorkflow) {
-    builderWorkflow = workflowRepo.createSystem({
+    builderWorkflow = workflowRepo.createBuiltin({
       name: "AI Builder",
       description:
         "System workflow for the AI builder chat. Creates skills, workflows, and MCP servers via conversation.",
       instructions: builderInstructions,
     });
-    console.log(`[Server] Created system builder workflow: ${builderWorkflow.id}`);
+    console.log(`[Server] Created built-in builder workflow: ${builderWorkflow.id}`);
   } else {
     // Update instructions + skills on every startup (idempotent)
     workflowRepo.update(builderWorkflow.id, {

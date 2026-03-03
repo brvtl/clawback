@@ -92,9 +92,9 @@
                   status={workflow.enabled ? "completed" : "failed"}
                   label={workflow.enabled ? "Enabled" : "Disabled"}
                 />
-                {#if workflow.system}
+                {#if workflow.isBuiltin}
                   <span class="text-xs px-2 py-1 bg-cyan-900/50 text-cyan-300 rounded">
-                    System
+                    Built-in
                   </span>
                 {/if}
                 <span class="text-xs px-2 py-1 bg-purple-900/50 text-purple-300 rounded">
@@ -116,7 +116,7 @@
               >
                 Edit
               </a>
-              {#if !workflow.system}
+              {#if !workflow.isBuiltin}
                 <button
                   on:click={() => deleteWorkflow(workflow.id, workflow.name)}
                   class="px-3 py-1 text-sm bg-red-900/50 hover:bg-red-900 text-red-300 rounded transition-colors"

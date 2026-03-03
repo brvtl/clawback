@@ -170,7 +170,7 @@
         >
           Edit Skill
         </button>
-        {#if !skill.system}
+        {#if !skill.isBuiltin}
           <button
             on:click={deleteSkill}
             disabled={deleting}
@@ -190,10 +190,10 @@
 
     <div class="flex items-center gap-3 mb-2">
       <h1 class="text-3xl font-bold">{skill.name}</h1>
-      {#if skill.system}
+      {#if skill.isBuiltin}
         <span
           class="text-xs font-medium px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30"
-          >System</span
+          >Built-in</span
         >
       {/if}
     </div>

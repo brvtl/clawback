@@ -54,7 +54,7 @@ export interface ApiSkill {
   notifications?: { onComplete?: boolean; onError?: boolean };
   knowledge?: string[];
   model?: SkillModel;
-  system?: boolean;
+  isBuiltin?: boolean;
 }
 
 export interface ApiNotification {
@@ -94,7 +94,7 @@ export interface ApiWorkflow {
   skills: string[];
   orchestratorModel: "opus" | "sonnet";
   enabled: boolean;
-  system?: boolean;
+  isBuiltin?: boolean;
   createdAt?: number;
   updatedAt?: number;
 }

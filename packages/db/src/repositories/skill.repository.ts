@@ -83,7 +83,7 @@ export class SkillRepository {
         : undefined,
       // Model selection
       model: (dbSkill.model as SkillModel) ?? "sonnet",
-      system: dbSkill.system ?? false,
+      isBuiltin: dbSkill.isBuiltin ?? false,
     };
   }
 
@@ -131,16 +131,16 @@ export class SkillRepository {
     return result ? this.toDomain(result) : undefined;
   }
 
-  findSystem(name: string): Skill | undefined {
+  findBuiltin(name: string): Skill | undefined {
     const result = this.db
       .select()
       .from(skills)
-      .where(and(eq(skills.system, true), eq(skills.name, name)))
+      .where(and(eq(skills.isBuiltin, true), eq(skills.name, name)))
       .get();
     return result ? this.toDomain(result) : undefined;
   }
 
-  createSystem(input: {
+  createBuiltin(input: {
     name: string;
     description?: string;
     instructions: string;
@@ -162,7 +162,7 @@ export class SkillRepository {
       notifications: JSON.stringify({ onComplete: false, onError: true }),
       enabled: true,
       source: "api",
-      system: true,
+      isBuiltin: true,
       model: input.model ?? "sonnet",
       createdAt: now,
       updatedAt: now,
@@ -170,7 +170,7 @@ export class SkillRepository {
 
     this.db.insert(skills).values(dbSkill).run();
 
-    return this.toDomain({ ...dbSkill, enabled: true, system: true } as DbSkill);
+    return this.toDomain({ ...dbSkill, enabled: true, isBuiltin: true } as DbSkill);
   }
 
   findAll(enabledOnly = true): Skill[] {
@@ -216,9 +216,9 @@ export class SkillRepository {
   }
 
   delete(id: string): boolean {
-    // Guard against deleting system skills
+    // Guard against deleting built-in skills
     const existing = this.db.select().from(skills).where(eq(skills.id, id)).get();
-    if (!existing || existing.system) return false;
+    if (!existing || existing.isBuiltin) return false;
 
     // Remove scheduled jobs referencing this skill to avoid FK constraint failure
     this.db.delete(scheduledJobs).where(eq(scheduledJobs.skillId, id)).run();

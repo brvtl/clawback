@@ -295,8 +295,8 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       if (!skill) {
         return reply.status(404).send({ error: "Skill not found" });
       }
-      if (skill.system) {
-        return reply.status(403).send({ error: "Cannot delete system skills" });
+      if (skill.isBuiltin) {
+        return reply.status(403).send({ error: "Cannot delete built-in skills" });
       }
       const deleted = context.skillRegistry.deleteSkill(request.params.id);
       if (!deleted) {
@@ -752,8 +752,8 @@ export function registerApiRoutes(server: FastifyInstance, context: ServerContex
       if (!workflow) {
         return reply.status(404).send({ error: "Workflow not found" });
       }
-      if (workflow.system) {
-        return reply.status(403).send({ error: "Cannot delete system workflows" });
+      if (workflow.isBuiltin) {
+        return reply.status(403).send({ error: "Cannot delete built-in workflows" });
       }
       const deleted = context.workflowRegistry.deleteWorkflow(request.params.id);
       if (!deleted) {

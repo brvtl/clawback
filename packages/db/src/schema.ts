@@ -62,7 +62,7 @@ export const skills = sqliteTable("skills", {
   reviewResult: text("review_result"), // JSON with review details
   // Model selection
   model: text("model", { enum: ["opus", "sonnet", "haiku"] }).default("sonnet"),
-  system: integer("system", { mode: "boolean" }).notNull().default(false),
+  isBuiltin: integer("is_builtin", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
@@ -106,7 +106,7 @@ export const workflows = sqliteTable("workflows", {
     .notNull()
     .default("opus"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-  system: integer("system", { mode: "boolean" }).notNull().default(false),
+  isBuiltin: integer("is_builtin", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
