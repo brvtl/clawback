@@ -392,7 +392,7 @@ export class WorkflowExecutor {
     const hitlToolUse = Array.isArray(content)
       ? content.find(
           (block): block is Anthropic.ToolUseBlock =>
-            block.type === "tool_use" && block.name === "request_human_input"
+            block.type === "tool_use" && block.name.endsWith("request_human_input")
         )
       : undefined;
 

@@ -71,6 +71,13 @@
       "when": 1772668800000,
       "tag": "0009_rename_system_to_is_builtin",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1772575371294,
+      "tag": "0010_familiar_captain_stacy",
+      "breakpoints": true
     }
   ]
 }

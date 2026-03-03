@@ -8,10 +8,9 @@ import type { AiEngine, LoopConfig, LoopObserver, LoopResult, CustomToolDef } fr
  */
 export class AgentSdkEngine implements AiEngine {
   async runLoop(config: LoopConfig, observer: LoopObserver): Promise<LoopResult> {
-    // Build MCP server configs for SDK (array format: AgentMcpServerSpec[])
-    const mcpServers: Array<
-      Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
-    > = [];
+    // Build MCP server configs — Options.mcpServers accepts Record<string, McpServerConfig>
+    // which handles both stdio configs and in-process SDK server instances.
+    const mcpServers: Record<string, unknown> = {};
 
     for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
       const resolvedEnv: Record<string, string> = {};
@@ -23,16 +22,14 @@ export class AgentSdkEngine implements AiEngine {
         }
       }
 
-      mcpServers.push({
-        [name]: {
-          command: serverConfig.command,
-          args: serverConfig.args,
-          env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined,
-        },
-      });
+      mcpServers[name] = {
+        command: serverConfig.command,
+        args: serverConfig.args,
+        env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined,
+      };
     }
 
-    // Build custom tools as an SDK MCP server
+    // Build custom tools as an in-process SDK MCP server
     let paused = false;
     let pauseToolUseId: string | undefined;
     const abortController = new AbortController();
@@ -43,7 +40,9 @@ export class AgentSdkEngine implements AiEngine {
           ct,
           () => {
             paused = true;
-            abortController.abort();
+            // Abort the SDK process to prevent it from making the next API call.
+            // We delay slightly to let the MCP tool response write complete.
+            setTimeout(() => abortController.abort(), 100);
           },
           (id) => {
             pauseToolUseId = id;
@@ -51,18 +50,12 @@ export class AgentSdkEngine implements AiEngine {
         )
       );
 
-      const customServer = createSdkMcpServer({
+      // createSdkMcpServer returns McpSdkServerConfigWithInstance — a non-serializable
+      // in-process MCP server. The SDK handles it natively via Options.mcpServers.
+      mcpServers["clawback-custom"] = createSdkMcpServer({
         name: "clawback-custom",
         version: "1.0.0",
         tools: sdkTools,
-      });
-
-      mcpServers.push({
-        "clawback-custom": customServer as unknown as {
-          command: string;
-          args?: string[];
-          env?: Record<string, string>;
-        },
       });
     }
 
@@ -92,8 +85,11 @@ export class AgentSdkEngine implements AiEngine {
         prompt: initialContent,
         options: {
           systemPrompt: config.systemPrompt ?? undefined,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
-          mcpServers: mcpServers as any,
+          model: config.model,
+          mcpServers: mcpServers as Record<
+            string,
+            { command: string; args?: string[]; env?: Record<string, string> }
+          >,
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
           maxTurns: config.maxTurns ?? 10,
@@ -148,9 +144,16 @@ export class AgentSdkEngine implements AiEngine {
             }
           }
         }
+
+        // Check if a custom tool signaled pause — break out of the loop
+        // and close the query gracefully instead of aborting mid-flight
+        if (paused) {
+          q.close();
+          break;
+        }
       }
     } catch (err: unknown) {
-      // AbortError from pause is expected
+      // Ignore errors after pause — the query was closed intentionally
       if (paused) {
         return {
           finalText,
@@ -238,6 +241,8 @@ export class AgentSdkEngine implements AiEngine {
 
   /**
    * Convert Anthropic MessageParam[] to a prompt string for the SDK.
+   * Preserves tool call/result context so Claude understands the conversation history
+   * (important for HITL resume where the SDK starts a fresh session).
    */
   private messagesToPromptContent(messages: Array<{ role: string; content: unknown }>): string {
     const parts: string[] = [];
@@ -247,11 +252,22 @@ export class AgentSdkEngine implements AiEngine {
         parts.push(msg.content);
       } else if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
-          const b = block as { type?: string; text?: string; content?: string };
+          const b = block as {
+            type?: string;
+            text?: string;
+            content?: string;
+            name?: string;
+            input?: unknown;
+            tool_use_id?: string;
+            is_error?: boolean;
+          };
           if (b.type === "text" && b.text) {
             parts.push(b.text);
+          } else if (b.type === "tool_use" && b.name) {
+            parts.push(`[Previous tool call: ${b.name}(${JSON.stringify(b.input)})]`);
           } else if (b.type === "tool_result" && b.content) {
-            parts.push(b.content);
+            const prefix = b.is_error ? "[Tool error]" : "[Tool result]";
+            parts.push(`${prefix} ${b.content}`);
           }
         }
       }

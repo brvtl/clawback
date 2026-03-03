@@ -195,9 +195,7 @@ export const builderSessions = sqliteTable("builder_sessions", {
 // Notifications table - user notifications
 export const notifications = sqliteTable("notifications", {
   id: text("id").primaryKey(),
-  runId: text("run_id")
-    .notNull()
-    .references(() => runs.id),
+  runId: text("run_id").notNull(),
   skillId: text("skill_id").notNull(),
   type: text("type", { enum: ["success", "error", "info", "warning"] }).notNull(),
   title: text("title").notNull(),
