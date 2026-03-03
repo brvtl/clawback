@@ -1,15 +1,16 @@
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import type { Workflow, WorkflowRun, Skill, Event, SkillRunResult } from "@clawback/shared";
 import type {
   WorkflowRepository,
   SkillRepository,
-  RunRepository,
   EventRepository,
+  RunRepository,
   CheckpointRepository,
   HitlRequestRepository,
 } from "@clawback/db";
-import { callWithRetry, type SkillExecutor } from "../skills/executor.js";
+import type { SkillExecutor } from "../skills/executor.js";
 import type { NotificationService } from "./notifications.js";
+import type { AiEngine, CustomToolDef } from "../ai/types.js";
 
 export interface WorkflowExecutorDependencies {
   workflowRepo: WorkflowRepository;
@@ -20,105 +21,8 @@ export interface WorkflowExecutorDependencies {
   checkpointRepo?: CheckpointRepository;
   hitlRequestRepo?: HitlRequestRepository;
   notificationService?: NotificationService;
-  anthropicApiKey?: string;
+  engine?: AiEngine;
 }
-
-// Tools available to the orchestrator AI
-const ORCHESTRATOR_TOOLS: Anthropic.Tool[] = [
-  {
-    name: "spawn_skill",
-    description:
-      "Execute a skill with the given inputs. The skill will process the inputs and return results. Use this to delegate work to specialized skills.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        skillId: {
-          type: "string",
-          description: "The ID of the skill to execute",
-        },
-        inputs: {
-          type: "object",
-          description:
-            "Input data to pass to the skill. This will be included in the event payload.",
-          additionalProperties: true,
-        },
-        reason: {
-          type: "string",
-          description: "Brief explanation of why you're spawning this skill",
-        },
-      },
-      required: ["skillId", "inputs"],
-    },
-  },
-  {
-    name: "complete_workflow",
-    description:
-      "Mark the workflow as completed with a summary of what was accomplished. Call this when all required skills have been executed successfully.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        summary: {
-          type: "string",
-          description: "A summary of what was accomplished in this workflow run",
-        },
-        results: {
-          type: "object",
-          description: "Key results from the workflow execution",
-          additionalProperties: true,
-        },
-      },
-      required: ["summary"],
-    },
-  },
-  {
-    name: "fail_workflow",
-    description:
-      "Mark the workflow as failed with an error message. Call this if a critical skill fails or the workflow cannot be completed.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        error: {
-          type: "string",
-          description: "Description of why the workflow failed",
-        },
-        partialResults: {
-          type: "object",
-          description: "Any partial results that were obtained before failure",
-          additionalProperties: true,
-        },
-      },
-      required: ["error"],
-    },
-  },
-  {
-    name: "request_human_input",
-    description:
-      "Pause the workflow and request input from a human operator. Use this when you need confirmation, clarification, or a decision before proceeding. The workflow will be paused until the human responds.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        prompt: {
-          type: "string",
-          description: "What you need from the human - be specific and clear",
-        },
-        context: {
-          type: "string",
-          description: "Additional context to help the human understand the situation",
-        },
-        options: {
-          type: "array",
-          items: { type: "string" },
-          description: "Suggested responses the human can choose from",
-        },
-        timeout_minutes: {
-          type: "number",
-          description: "How long to wait for a response before the request expires",
-        },
-      },
-      required: ["prompt"],
-    },
-  },
-];
 
 export interface OrchestratorLoopResult {
   output: unknown;
@@ -127,39 +31,35 @@ export interface OrchestratorLoopResult {
 }
 
 export class WorkflowExecutor {
-  private anthropic: Anthropic | null = null;
   private workflowRepo: WorkflowRepository;
   private skillRepo: SkillRepository;
   private eventRepo: EventRepository;
-  private runRepo: RunRepository;
   private skillExecutor: SkillExecutor;
   private checkpointRepo?: CheckpointRepository;
   private hitlRequestRepo?: HitlRequestRepository;
   private notificationService?: NotificationService;
+  private engine?: AiEngine;
 
   constructor(deps: WorkflowExecutorDependencies) {
     this.workflowRepo = deps.workflowRepo;
     this.skillRepo = deps.skillRepo;
     this.eventRepo = deps.eventRepo;
-    this.runRepo = deps.runRepo;
     this.skillExecutor = deps.skillExecutor;
     this.checkpointRepo = deps.checkpointRepo;
     this.hitlRequestRepo = deps.hitlRequestRepo;
     this.notificationService = deps.notificationService;
+    this.engine = deps.engine;
 
-    if (deps.anthropicApiKey) {
-      this.anthropic = new Anthropic({ apiKey: deps.anthropicApiKey });
-      console.log("[WorkflowExecutor] Initialized with Anthropic API key");
+    if (deps.engine) {
+      console.log("[WorkflowExecutor] Initialized with AiEngine");
     } else {
-      console.log(
-        "[WorkflowExecutor] WARNING: No ANTHROPIC_API_KEY configured - workflows will not run"
-      );
+      console.log("[WorkflowExecutor] WARNING: No AiEngine configured - workflows will not run");
     }
   }
 
   async execute(workflow: Workflow, event: Event): Promise<WorkflowRun> {
-    if (!this.anthropic) {
-      throw new Error("ANTHROPIC_API_KEY environment variable is required for workflow execution");
+    if (!this.engine) {
+      throw new Error("AiEngine is required for workflow execution");
     }
 
     // Parse event payload (may be string from DB or already parsed Record)
@@ -216,8 +116,8 @@ export class WorkflowExecutor {
     workflowRun: WorkflowRun,
     resumeMessages?: Anthropic.MessageParam[]
   ): Promise<OrchestratorLoopResult> {
-    if (!this.anthropic) {
-      throw new Error("Anthropic client not initialized");
+    if (!this.engine) {
+      throw new Error("AiEngine not initialized");
     }
 
     // Get available skills
@@ -237,11 +137,10 @@ export class WorkflowExecutor {
     const model =
       workflow.orchestratorModel === "opus" ? "claude-opus-4-20250514" : "claude-sonnet-4-20250514";
 
-    let messages: Anthropic.MessageParam[] = resumeMessages ?? [
+    const messages: Anthropic.MessageParam[] = resumeMessages ?? [
       { role: "user", content: userMessage },
     ];
     const skillResults: SkillRunResult[] = [];
-    let continueLoop = true;
     let finalOutput: unknown = null;
     let cpSequence = this.checkpointRepo?.getNextSequence(undefined, workflowRun.id) ?? 0;
 
@@ -249,217 +148,317 @@ export class WorkflowExecutor {
       `[WorkflowExecutor] Starting orchestration for workflow "${workflow.name}" with model ${model}${resumeMessages ? " (resumed)" : ""}`
     );
 
-    while (continueLoop) {
-      const response: Anthropic.Message = await callWithRetry(
-        () =>
-          this.anthropic!.messages.create({
-            model,
-            max_tokens: 4096,
-            system: systemPrompt,
-            tools: ORCHESTRATOR_TOOLS,
-            messages,
-          }),
-        3,
-        `workflow "${workflow.name}" orchestrator`
-      );
+    // Build custom tools for the orchestrator
+    const customTools: CustomToolDef[] = [
+      {
+        name: "spawn_skill",
+        description:
+          "Execute a skill with the given inputs. The skill will process the inputs and return results. Use this to delegate work to specialized skills.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            skillId: { type: "string", description: "The ID of the skill to execute" },
+            inputs: {
+              type: "object",
+              description: "Input data to pass to the skill.",
+              additionalProperties: true,
+            },
+            reason: {
+              type: "string",
+              description: "Brief explanation of why you're spawning this skill",
+            },
+          },
+          required: ["skillId", "inputs"],
+        },
+        handler: async (input: Record<string, unknown>) => {
+          this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "skill_spawn", {
+            skillId: input.skillId,
+            inputs: input.inputs,
+            reason: input.reason,
+          });
 
-      // Check for tool use
-      const toolUseBlocks = response.content.filter(
-        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-      );
+          const spawnResult = await this.handleSpawnSkill(
+            input,
+            event,
+            workflowRun,
+            availableSkills
+          );
 
-      // Checkpoint text blocks from assistant response
-      const textBlocks = response.content.filter(
-        (block): block is Anthropic.TextBlock => block.type === "text"
-      );
-      if (textBlocks.length > 0) {
-        const text = textBlocks.map((b) => b.text).join("\n");
-        this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "assistant_message", {
-          text,
-        });
-      }
+          const isError = !!spawnResult.error;
 
-      if (toolUseBlocks.length > 0) {
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
+          this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "skill_complete", {
+            skillId: input.skillId,
+            status: isError ? "failed" : "completed",
+            result: isError ? spawnResult.error : spawnResult.result,
+          });
 
-        for (const toolUse of toolUseBlocks) {
-          /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
-          const toolName = toolUse.name;
-          const toolInput = toolUse.input as Record<string, unknown>;
-          const toolId = toolUse.id;
-          /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
+          if (isError) {
+            return {
+              type: "result" as const,
+              content: JSON.stringify({ error: spawnResult.error }),
+              isError: true,
+            };
+          }
 
+          if (spawnResult.result) {
+            skillResults.push(spawnResult.result);
+          }
+          return { type: "result" as const, content: JSON.stringify(spawnResult.result) };
+        },
+      },
+      {
+        name: "complete_workflow",
+        description:
+          "Mark the workflow as completed with a summary of what was accomplished. Call this when all required skills have been executed successfully.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            summary: {
+              type: "string",
+              description: "A summary of what was accomplished in this workflow run",
+            },
+            results: {
+              type: "object",
+              description: "Key results from the workflow execution",
+              additionalProperties: true,
+            },
+          },
+          required: ["summary"],
+        },
+        handler: (input: Record<string, unknown>) => {
+          const summary = input.summary as string;
+          const results = input.results as Record<string, unknown> | undefined;
+          finalOutput = {
+            summary,
+            results: results ?? {},
+            skillRuns: skillResults,
+          };
+          console.log(`[WorkflowExecutor] Workflow completed: ${summary}`);
+          return { type: "result" as const, content: JSON.stringify({ success: true, summary }) };
+        },
+      },
+      {
+        name: "fail_workflow",
+        description:
+          "Mark the workflow as failed with an error message. Call this if a critical skill fails or the workflow cannot be completed.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            error: { type: "string", description: "Description of why the workflow failed" },
+            partialResults: {
+              type: "object",
+              description: "Any partial results that were obtained before failure",
+              additionalProperties: true,
+            },
+          },
+          required: ["error"],
+        },
+        handler: (input: Record<string, unknown>) => {
+          const error = input.error as string;
+          const partialResults = input.partialResults as Record<string, unknown> | undefined;
+          finalOutput = {
+            error,
+            partialResults: partialResults ?? {},
+            skillRuns: skillResults,
+          };
+
+          this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "error", {
+            error,
+            partialResults,
+          });
+
+          console.log(`[WorkflowExecutor] Workflow failed: ${error}`);
+          // Throw to trigger failed status at the executor level
+          throw new Error(error);
+        },
+      },
+      {
+        name: "request_human_input",
+        description:
+          "Pause the workflow and request input from a human operator. Use this when you need confirmation, clarification, or a decision before proceeding.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            prompt: {
+              type: "string",
+              description: "What you need from the human - be specific and clear",
+            },
+            context: {
+              type: "string",
+              description: "Additional context to help the human understand the situation",
+            },
+            options: {
+              type: "array",
+              items: { type: "string" },
+              description: "Suggested responses the human can choose from",
+            },
+            timeout_minutes: {
+              type: "number",
+              description: "How long to wait for a response before the request expires",
+            },
+          },
+          required: ["prompt"],
+        },
+        handler: (_input: Record<string, unknown>) => {
+          if (!this.checkpointRepo || !this.hitlRequestRepo) {
+            return {
+              type: "result" as const,
+              content: JSON.stringify({ error: "Human-in-the-loop is not configured" }),
+              isError: true,
+            };
+          }
+
+          // Signal the engine to pause — the engine will stop the loop and return
+          // the current messages for checkpoint state reconstruction
+          return { type: "pause" as const, toolUseId: "hitl_pending" };
+        },
+      },
+    ];
+
+    const result = await this.engine.runLoop(
+      {
+        systemPrompt,
+        messages,
+        model,
+        mcpServers: {},
+        customTools,
+      },
+      {
+        onText: (text) => {
+          this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "assistant_message", { text });
+        },
+        onToolCall: (toolName, toolInput, toolUseId) => {
           console.log(`[WorkflowExecutor] Tool call: ${toolName}`);
-
-          // Checkpoint tool call
           this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "tool_call", {
             toolName,
             toolInput,
-            toolUseId: toolId,
+            toolUseId,
           });
-
-          let result: string;
-          let isError = false;
-
-          if (toolName === "spawn_skill") {
-            this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "skill_spawn", {
-              skillId: toolInput.skillId,
-              inputs: toolInput.inputs,
-              reason: toolInput.reason,
-            });
-
-            const spawnResult = await this.handleSpawnSkill(
-              toolInput,
-              event,
-              workflowRun,
-              availableSkills
-            );
-            if (spawnResult.error) {
-              result = JSON.stringify({ error: spawnResult.error });
-              isError = true;
-            } else {
-              result = JSON.stringify(spawnResult.result);
-              if (spawnResult.result) {
-                skillResults.push(spawnResult.result);
-              }
-            }
-
-            this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "skill_complete", {
-              skillId: toolInput.skillId,
-              status: isError ? "failed" : "completed",
-              result: isError ? spawnResult.error : spawnResult.result,
-            });
-          } else if (toolName === "complete_workflow") {
-            const summary = toolInput.summary as string;
-            const results = toolInput.results as Record<string, unknown> | undefined;
-            finalOutput = {
-              summary,
-              results: results ?? {},
-              skillRuns: skillResults,
-            };
-            result = JSON.stringify({ success: true, summary });
-            continueLoop = false;
-            console.log(`[WorkflowExecutor] Workflow completed: ${summary}`);
-          } else if (toolName === "fail_workflow") {
-            const error = toolInput.error as string;
-            const partialResults = toolInput.partialResults as Record<string, unknown> | undefined;
-            finalOutput = {
-              error,
-              partialResults: partialResults ?? {},
-              skillRuns: skillResults,
-            };
-            result = JSON.stringify({ failed: true, error });
-            continueLoop = false;
-
-            this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "error", {
-              error,
-              partialResults,
-            });
-
-            console.log(`[WorkflowExecutor] Workflow failed: ${error}`);
-
-            // Throw error to trigger failed status
-            throw new Error(error);
-          } else if (toolName === "request_human_input") {
-            // HITL: save checkpoint with full state, create request, pause
-            const hitlResult = this.handleHitlRequest(
-              toolInput,
-              toolId,
-              workflowRun,
-              messages,
-              response.content,
-              cpSequence
-            );
-
-            if (hitlResult) {
-              // Broadcast HITL request
-              this.notificationService?.broadcastMessage({
-                type: "hitl_request",
-                workflowRunId: workflowRun.id,
-                request: {
-                  id: hitlResult.hitlRequestId,
-                  prompt: toolInput.prompt as string,
-                  context: toolInput.context,
-                  options: toolInput.options,
-                  timeoutAt: toolInput.timeout_minutes
-                    ? Date.now() + (toolInput.timeout_minutes as number) * 60 * 1000
-                    : undefined,
-                },
-              });
-
-              // Desktop notification
-              void this.notificationService?.sendDesktopNotification({
-                id: hitlResult.hitlRequestId,
-                type: "warning",
-                title: "Human Input Needed",
-                message: toolInput.prompt as string,
-              });
-
-              return {
-                output: finalOutput,
-                paused: true,
-                hitlRequestId: hitlResult.hitlRequestId,
-              };
-            }
-
-            // Fallback if HITL repos not available
-            result = JSON.stringify({
-              error: "Human-in-the-loop is not configured",
-            });
-            isError = true;
-            toolResults.push({
-              type: "tool_result",
-              tool_use_id: toolId,
-              content: result,
-              is_error: isError,
-            });
-            continue;
-          } else {
-            result = JSON.stringify({ error: `Unknown tool: ${toolName}` });
-            isError = true;
-          }
-
-          // Checkpoint tool result
+        },
+        onToolResult: (toolName, toolUseId, resultText, isError) => {
           this.saveWorkflowCheckpoint(workflowRun.id, cpSequence++, "tool_result", {
             toolName,
-            toolUseId: toolId,
-            result,
+            toolUseId,
+            result: resultText,
             isError,
           });
-
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: toolId,
-            content: result,
-            is_error: isError,
-          });
-        }
-
-        // Continue the conversation
-        messages = [
-          ...messages,
-          { role: "assistant", content: response.content },
-          { role: "user", content: toolResults },
-        ];
-      } else {
-        // No tool use - check if we have a final response
-        if (textBlocks.length > 0 && !finalOutput) {
-          finalOutput = {
-            summary: textBlocks.map((b) => b.text).join("\n"),
-            skillRuns: skillResults,
-          };
-        }
-
-        continueLoop = false;
+        },
       }
+    );
 
-      // Safety check for stop reason
-      if (response.stop_reason === "end_turn" && toolUseBlocks.length === 0) {
-        continueLoop = false;
+    // Handle HITL pause
+    if (result.paused) {
+      // Find the request_human_input tool call in the last assistant message
+      // to get the actual toolUseId and input
+      const hitlResult = this.handleHitlFromPause(result, workflowRun, cpSequence);
+      if (hitlResult) {
+        return {
+          output: finalOutput,
+          paused: true,
+          hitlRequestId: hitlResult.hitlRequestId,
+        };
       }
+      // Fallback if HITL couldn't be created — shouldn't happen normally
+    }
+
+    // If no tool set finalOutput, use the text response
+    if (!finalOutput && result.finalText) {
+      finalOutput = {
+        summary: result.finalText,
+        skillRuns: skillResults,
+      };
     }
 
     return { output: finalOutput };
+  }
+
+  /**
+   * After the engine pauses for HITL, extract the tool call info from result.messages
+   * and create the checkpoint + HITL request.
+   */
+  private handleHitlFromPause(
+    result: { messages: Anthropic.MessageParam[]; pauseToolUseId?: string },
+    workflowRun: WorkflowRun,
+    cpSequence: number
+  ): { hitlRequestId: string } | null {
+    if (!this.checkpointRepo || !this.hitlRequestRepo) return null;
+
+    // Find the request_human_input tool call in the messages
+    // It's in the last assistant message
+    const lastAssistant = [...result.messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return null;
+
+    const content = lastAssistant.content as Anthropic.ContentBlock[];
+    const hitlToolUse = Array.isArray(content)
+      ? content.find(
+          (block): block is Anthropic.ToolUseBlock =>
+            block.type === "tool_use" && block.name === "request_human_input"
+        )
+      : undefined;
+
+    if (!hitlToolUse) return null;
+
+    const toolInput = hitlToolUse.input as Record<string, unknown>;
+    const prompt = toolInput.prompt as string;
+    const context = toolInput.context as string | undefined;
+    const options = toolInput.options as string[] | undefined;
+    const timeoutMinutes = toolInput.timeout_minutes as number | undefined;
+    const toolUseId = hitlToolUse.id;
+
+    // Save checkpoint with full state
+    const checkpoint = this.checkpointRepo.create({
+      workflowRunId: workflowRun.id,
+      sequence: cpSequence,
+      type: "hitl_request",
+      data: { prompt, context, options, toolUseId },
+      state: result.messages,
+    });
+
+    // Create HITL request
+    const hitlRequest = this.hitlRequestRepo.create({
+      workflowRunId: workflowRun.id,
+      checkpointId: checkpoint.id,
+      prompt,
+      context: context ? { text: context } : undefined,
+      options,
+      timeoutAt: timeoutMinutes ? Date.now() + timeoutMinutes * 60 * 1000 : undefined,
+    });
+
+    // Set workflow run status to waiting_for_input
+    this.workflowRepo.updateRunStatus(workflowRun.id, "waiting_for_input");
+
+    this.notificationService?.broadcastMessage({
+      type: "run_status",
+      workflowRunId: workflowRun.id,
+      status: "waiting_for_input",
+    });
+
+    // Broadcast HITL request
+    this.notificationService?.broadcastMessage({
+      type: "hitl_request",
+      workflowRunId: workflowRun.id,
+      request: {
+        id: hitlRequest.id,
+        prompt,
+        context,
+        options,
+        timeoutAt: timeoutMinutes ? Date.now() + timeoutMinutes * 60 * 1000 : undefined,
+      },
+    });
+
+    // Desktop notification
+    void this.notificationService?.sendDesktopNotification({
+      id: hitlRequest.id,
+      type: "warning",
+      title: "Human Input Needed",
+      message: prompt,
+    });
+
+    console.log(
+      `[WorkflowExecutor] HITL request created: ${hitlRequest.id} for workflow run ${workflowRun.id}`
+    );
+
+    return { hitlRequestId: hitlRequest.id };
   }
 
   private buildUserMessage(event: Event): string {
@@ -609,65 +608,9 @@ Analyze the event and orchestrate the appropriate skills to complete the workflo
     }
   }
 
-  private handleHitlRequest(
-    toolInput: Record<string, unknown>,
-    toolUseId: string,
-    workflowRun: WorkflowRun,
-    messages: Anthropic.MessageParam[],
-    responseContent: Anthropic.ContentBlock[],
-    cpSequence: number
-  ): { hitlRequestId: string } | null {
-    if (!this.checkpointRepo || !this.hitlRequestRepo) return null;
-
-    const prompt = toolInput.prompt as string;
-    const context = toolInput.context as string | undefined;
-    const options = toolInput.options as string[] | undefined;
-    const timeoutMinutes = toolInput.timeout_minutes as number | undefined;
-
-    // Build the full messages state including the current assistant response
-    const fullMessages: Anthropic.MessageParam[] = [
-      ...messages,
-      { role: "assistant", content: responseContent },
-    ];
-
-    // Save checkpoint with full state
-    const checkpoint = this.checkpointRepo.create({
-      workflowRunId: workflowRun.id,
-      sequence: cpSequence,
-      type: "hitl_request",
-      data: { prompt, context, options, toolUseId },
-      state: fullMessages,
-    });
-
-    // Create HITL request
-    const hitlRequest = this.hitlRequestRepo.create({
-      workflowRunId: workflowRun.id,
-      checkpointId: checkpoint.id,
-      prompt,
-      context: context ? { text: context } : undefined,
-      options,
-      timeoutAt: timeoutMinutes ? Date.now() + timeoutMinutes * 60 * 1000 : undefined,
-    });
-
-    // Set workflow run status to waiting_for_input
-    this.workflowRepo.updateRunStatus(workflowRun.id, "waiting_for_input");
-
-    this.notificationService?.broadcastMessage({
-      type: "run_status",
-      workflowRunId: workflowRun.id,
-      status: "waiting_for_input",
-    });
-
-    console.log(
-      `[WorkflowExecutor] HITL request created: ${hitlRequest.id} for workflow run ${workflowRun.id}`
-    );
-
-    return { hitlRequestId: hitlRequest.id };
-  }
-
   async resumeFromCheckpoint(hitlRequestId: string): Promise<WorkflowRun> {
-    if (!this.anthropic) {
-      throw new Error("Anthropic client not initialized");
+    if (!this.engine) {
+      throw new Error("AiEngine not initialized");
     }
     if (!this.hitlRequestRepo || !this.checkpointRepo) {
       throw new Error("HITL repos not configured");

@@ -2,17 +2,52 @@
 
 ## Project Overview
 
-Clawback is an event-driven Claude automation engine. It receives webhook events (GitHub, Slack, etc.), routes them to matching skills or workflows, executes them using the Anthropic API with MCP tools, and notifies users of results.
+Clawback is an event-driven Claude automation engine. It receives webhook events (GitHub, Slack, etc.), routes them to matching skills or workflows, executes them via a pluggable AI engine (direct Anthropic API or Agent SDK), and notifies users of results.
 
 ## Architecture
 
 ```
-apps/daemon/     - Fastify backend, skill/workflow executor, webhook handlers
-apps/web/        - SvelteKit frontend, builder UI
-packages/shared/ - Shared types, Zod schemas, MCP server registry
-packages/db/     - Drizzle ORM, SQLite, repositories
-packages/mcp-server/ - Clawback MCP server for external tool access
+apps/daemon/           - Fastify backend, skill/workflow executor, webhook handlers
+  src/ai/              - AiEngine abstraction (DirectApiEngine, AgentSdkEngine)
+  src/skills/          - Skill executor, registry
+  src/services/        - Workflow executor, builder, scheduler, notifications
+  src/routes/          - API, webhook, builder routes
+  src/mcp/             - MCP server process management
+apps/web/              - SvelteKit frontend, builder UI
+packages/shared/       - Shared types, Zod schemas, MCP server registry
+packages/db/           - Drizzle ORM, SQLite, repositories
+packages/mcp-server/   - Clawback MCP server for external tool access
 ```
+
+## Subagents
+
+Use these subagents (via `Agent` tool with matching agent files in `.claude/agents/`) to keep the main context window clean. Each agent knows its domain's files, patterns, and conventions.
+
+| Agent        | Domain                                                    | Use when                                                              |
+| ------------ | --------------------------------------------------------- | --------------------------------------------------------------------- |
+| `daemon`     | Backend server, executors, AI engine, routes, services    | Modifying daemon logic, adding API endpoints, changing execution flow |
+| `web`        | SvelteKit frontend, Svelte components, stores, API client | Modifying UI pages, adding components, updating stores                |
+| `database`   | Drizzle schema, repositories, migrations                  | Adding tables/columns, new repositories, migration work               |
+| `shared`     | Shared types, Zod schemas, MCP server registry            | Modifying shared types, adding MCP server definitions                 |
+| `mcp-server` | Clawback MCP server tools                                 | Adding/modifying MCP tools exposed by Clawback                        |
+
+## AI Engine (Dual-Mode Execution)
+
+All AI execution goes through the `AiEngine` interface (`apps/daemon/src/ai/types.ts`). A factory function selects the implementation based on environment variables:
+
+- `ANTHROPIC_API_KEY` set → `DirectApiEngine` — calls Anthropic API directly, per-token billing
+- `CLAUDE_CODE_OAUTH_TOKEN` set → `AgentSdkEngine` — uses Claude Agent SDK, bills against Max subscription
+- Neither set → AI features disabled (graceful degradation)
+
+```
+apps/daemon/src/ai/
+  types.ts           - AiEngine interface, LoopConfig, LoopObserver, LoopResult, CustomToolDef
+  direct-engine.ts   - DirectApiEngine (MCP connections, message loop, tool permissions)
+  sdk-engine.ts      - AgentSdkEngine (Agent SDK query(), Zod schema conversion)
+  index.ts           - createAiEngine() factory + re-exports
+```
+
+Executors (SkillExecutor, WorkflowExecutor, BuilderExecutor) call `engine.runLoop(config, observer)` and never import SDK-specific code. The observer pattern provides checkpoints, and custom tools enable workflow orchestration.
 
 ## Key Concepts
 
@@ -21,7 +56,7 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 - Single-purpose automations triggered by events
 - Contain: name, description, instructions (prompt), triggers, MCP servers, tool permissions
 - Created via web UI (AI builder) or API
-- Executed using Anthropic API with MCP tool integration
+- Executed via AiEngine with MCP tool integration
 - Can include knowledge files for additional context
 - Tool permissions use glob patterns (e.g., `["mcp__github__*"]` to allow all GitHub tools)
 - Model selection per-skill: `haiku` (fast/cheap), `sonnet` (balanced, default), `opus` (most capable)
@@ -38,6 +73,7 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 
 - AI-orchestrated multi-skill automations
 - Use Claude (Opus/Sonnet) as orchestrator with custom tools: `spawn_skill`, `complete_workflow`, `fail_workflow`, `request_human_input`
+- Custom tools are passed as `CustomToolDef[]` to `engine.runLoop()` — handlers are closures over executor state
 - Can run skills in parallel or sequence based on orchestrator instructions
 - Triggered by events same as skills
 - Can pause for human input via `request_human_input` tool (status: `waiting_for_input`)
@@ -78,9 +114,9 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 ### Human-in-the-Loop (HITL)
 
 - Workflows can call `request_human_input` tool to pause and ask for human guidance
-- Creates a checkpoint with full conversation state, then exits the orchestrator loop
-- Human responds via `/hitl` page or API → workflow resumes from checkpoint
-- HITL requests stored in `hitl_requests` table with prompt, context, options, timeout
+- The tool handler returns `{ type: "pause" }` — the engine stops the loop and returns `result.paused = true`
+- Executor extracts HITL context from `result.messages`, creates checkpoint + HITL request in DB
+- Human responds via `/hitl` page or API → workflow resumes from saved messages
 - Daemon restart safe: state lives in DB, pending requests survive restarts
 
 ### MCP Servers
@@ -101,7 +137,7 @@ packages/mcp-server/ - Clawback MCP server for external tool access
 ### AI Builder
 
 - Chat interface at `/builder` for creating automations
-- Uses Claude Agent SDK with Clawback MCP server
+- Uses AiEngine with custom tools (same pattern as workflows)
 - Can create skills, workflows, and MCP servers via conversation
 - Returns structured actions that the frontend applies
 
@@ -158,35 +194,41 @@ Database access goes through repositories in `packages/db/src/repositories/`:
 1. Webhook received → `apps/daemon/src/routes/webhook.ts`
 2. Event created → `packages/db/src/repositories/event.repository.ts`
 3. Skill matched → `apps/daemon/src/skills/registry.ts`
-4. Skill executed → `apps/daemon/src/skills/executor.ts` (uses Anthropic API)
+4. Skill executed → `apps/daemon/src/skills/executor.ts` (calls `engine.runLoop()`)
 5. Run recorded → `packages/db/src/repositories/run.repository.ts`
 
 ### Workflow Execution Flow
 
 1. Event triggers workflow → `apps/daemon/src/workflows/registry.ts`
 2. Workflow executor starts → `apps/daemon/src/services/workflow-executor.ts`
-3. Claude orchestrates with tools: spawn_skill, complete_workflow, fail_workflow, request_human_input
-4. Skills spawned create synthetic events and execute
-5. Checkpoints saved at every step (broadcast via WebSocket)
-6. If `request_human_input` called: saves checkpoint with full state, creates HITL request, exits loop
-7. Human responds → workflow resumes from checkpoint with restored messages
-8. Workflow run recorded with all skill results
+3. Builds `CustomToolDef[]` with handlers (closures over executor state)
+4. Calls `engine.runLoop()` with custom tools + observer for checkpoints
+5. If `result.paused`: extracts HITL context from `result.messages`, saves checkpoint, creates request
+6. Human responds → workflow resumes with saved messages + human tool_result appended
+7. Workflow run recorded with all skill results
 
 ### MCP Server Resolution
 
-Skills/workflows reference MCP servers by name (e.g., `["github"]`). The executor resolves these to full configs from the database.
+Skills/workflows reference MCP servers by name (e.g., `["github"]`). The executor resolves these to `McpServerConfig` objects, which the AiEngine connects to internally.
 
 ## Testing
 
 - Unit tests with Vitest
 - Test files: `*.test.ts` alongside source files
 - Run: `pnpm test:run` or `pnpm test` (watch mode)
+- Executors are tested by mocking the `AiEngine` interface (not the Anthropic SDK directly)
 
 ## Important Files
 
-- `apps/daemon/src/skills/executor.ts` - Core skill execution with Anthropic API
+- `apps/daemon/src/ai/types.ts` - AiEngine interface and types
+- `apps/daemon/src/ai/direct-engine.ts` - DirectApiEngine (Anthropic API)
+- `apps/daemon/src/ai/sdk-engine.ts` - AgentSdkEngine (Agent SDK)
+- `apps/daemon/src/ai/index.ts` - createAiEngine() factory
+- `apps/daemon/src/skills/executor.ts` - Core skill execution
 - `apps/daemon/src/services/workflow-executor.ts` - Workflow orchestration + HITL + checkpoints
+- `apps/daemon/src/services/builder-executor.ts` - AI builder chat executor
 - `apps/daemon/src/services/scheduler.ts` - Cron scheduling service
+- `apps/daemon/src/server.ts` - Server wiring (creates engine, passes to executors)
 - `apps/daemon/src/routes/api.ts` - REST API endpoints
 - `apps/daemon/src/routes/webhook.ts` - Webhook ingestion
 - `apps/daemon/src/routes/builder.ts` - AI builder chat endpoint
@@ -229,4 +271,6 @@ Skills/workflows reference MCP servers by name (e.g., `["github"]`). The executo
 - Skill triggers use event types like `pull_request.opened`, not `pull_request` with action filter
 - Use wildcard patterns for broader matching: `pull_request.*` matches `pull_request.opened`, `pull_request.closed`, etc.
 - Repository filters are case-sensitive (`brvtl/ArchDotfiles` not `brvtl/archdotfiles`)
-- `ANTHROPIC_API_KEY` is required for both skill and workflow execution
+- Set either `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` — if neither is set, AI features are disabled
+- Executors never import SDK-specific code directly — always go through `AiEngine`
+- The `Event` type from the DB returns `payload: string` (JSON) but the shared type expects `Record<string, unknown>` — this is a known pre-existing type mismatch

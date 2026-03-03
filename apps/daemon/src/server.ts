@@ -31,6 +31,7 @@ import { WorkflowRegistry } from "./workflows/registry.js";
 import { registerWebhookRoutes } from "./routes/webhook.js";
 import { registerApiRoutes } from "./routes/api.js";
 import { registerBuilderRoutes } from "./routes/builder.js";
+import { createAiEngine } from "./ai/index.js";
 
 export interface ServerContext {
   db: DatabaseConnection;
@@ -151,6 +152,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   schedulerService.syncJobsFromSkills();
   schedulerService.syncJobsFromWorkflows();
 
+  // Initialize AI engine (direct API or Agent SDK based on available credentials)
+  let engine;
+  try {
+    engine = createAiEngine();
+  } catch {
+    console.log("[Server] WARNING: No AI credentials configured - AI features will be disabled");
+  }
+
   // Initialize skill executor with remote skill support
   const skillExecutor = new SkillExecutor({
     runRepo,
@@ -161,7 +170,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skillReviewer,
     checkpointRepo,
     notificationService,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    engine,
   });
 
   // Initialize workflow registry (after seeding)
@@ -178,7 +187,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     checkpointRepo,
     hitlRequestRepo,
     notificationService,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    engine,
   });
 
   // Initialize builder session support
@@ -191,7 +200,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const builderExecutor = new BuilderExecutor({
     builderSessionRepo,
     notificationService,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     workflowRepo,
     skillRepo,
     checkpointRepo,
@@ -199,6 +207,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skillExecutor,
     builderWorkflowId: builderWorkflow.id,
     builderSkillIds,
+    engine,
   });
 
   // Initialize event queue

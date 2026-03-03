@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.50",
     "@anthropic-ai/sdk": "^0.37.0",
     "@clawback/db": "workspace:*",
     "@clawback/shared": "workspace:*",
@@ -27,7 +28,8 @@
     "micromatch": "^4.0.5",
     "ngrok": "^5.0.0-beta.2",
     "node-notifier": "^10.0.1",
-    "yaml": "^2.4.0"
+    "yaml": "^2.4.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/micromatch": "^4.0.6",

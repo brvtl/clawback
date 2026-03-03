@@ -2,37 +2,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SkillExecutor, type ExecutorDependencies } from "./executor.js";
 import type { Skill, Event } from "@clawback/shared";
 import type { RunRepository, NotificationRepository, McpServerRepository } from "@clawback/db";
+import type { AiEngine, LoopConfig, LoopResult } from "../ai/types.js";
 
-// Mock Anthropic SDK
-vi.mock("@anthropic-ai/sdk", () => {
-  const mockCreate = vi.fn();
+function createMockEngine(overrides?: Partial<AiEngine>): AiEngine {
   return {
-    default: vi.fn().mockImplementation(() => ({
-      messages: { create: mockCreate },
-    })),
-    __mockCreate: mockCreate,
+    runLoop: vi.fn().mockResolvedValue({
+      finalText: "Hello from Claude",
+      messages: [],
+    } satisfies LoopResult),
+    ...overrides,
   };
-});
-
-// Mock MCP SDK
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi.fn().mockImplementation(() => ({
-    connect: vi.fn().mockResolvedValue(undefined),
-    listTools: vi.fn().mockResolvedValue({ tools: [] }),
-    callTool: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "result" }] }),
-    close: vi.fn().mockResolvedValue(undefined),
-  })),
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
-  StdioClientTransport: vi.fn().mockImplementation(() => ({})),
-}));
+}
 
 describe("SkillExecutor", () => {
   let executor: SkillExecutor;
   let mockRunRepo: Partial<RunRepository>;
   let mockNotifRepo: Partial<NotificationRepository>;
   let mockMcpServerRepo: Partial<McpServerRepository>;
+  let mockEngine: AiEngine;
   let mockDeps: ExecutorDependencies;
 
   const testSkill: Skill = {
@@ -95,11 +82,13 @@ describe("SkillExecutor", () => {
       findAll: vi.fn().mockReturnValue([]),
     };
 
+    mockEngine = createMockEngine();
+
     mockDeps = {
       runRepo: mockRunRepo as RunRepository,
       notifRepo: mockNotifRepo as NotificationRepository,
       mcpServerRepo: mockMcpServerRepo as McpServerRepository,
-      anthropicApiKey: "test-api-key",
+      engine: mockEngine,
     };
 
     executor = new SkillExecutor(mockDeps);
@@ -107,12 +96,6 @@ describe("SkillExecutor", () => {
 
   describe("execute", () => {
     it("should create a run record when starting execution", async () => {
-      // Mock the Claude API call to return immediately
-      vi.spyOn(executor as any, "runAgentLoop").mockResolvedValue({
-        output: { message: "Done" },
-        toolCalls: [],
-      });
-
       await executor.execute(testSkill, testEvent);
 
       expect(mockRunRepo.create).toHaveBeenCalledWith({
@@ -123,22 +106,12 @@ describe("SkillExecutor", () => {
     });
 
     it("should update run status to running", async () => {
-      vi.spyOn(executor as any, "runAgentLoop").mockResolvedValue({
-        output: { message: "Done" },
-        toolCalls: [],
-      });
-
       await executor.execute(testSkill, testEvent);
 
       expect(mockRunRepo.updateStatus).toHaveBeenCalledWith("run_123", "running");
     });
 
     it("should update run status to completed on success", async () => {
-      vi.spyOn(executor as any, "runAgentLoop").mockResolvedValue({
-        output: { message: "Done" },
-        toolCalls: [],
-      });
-
       await executor.execute(testSkill, testEvent);
 
       expect(mockRunRepo.updateStatus).toHaveBeenCalledWith(
@@ -150,7 +123,7 @@ describe("SkillExecutor", () => {
     });
 
     it("should update run status to failed on error", async () => {
-      vi.spyOn(executor as any, "runAgentLoop").mockRejectedValue(new Error("Test error"));
+      mockEngine.runLoop = vi.fn().mockRejectedValue(new Error("Test error"));
 
       await expect(executor.execute(testSkill, testEvent)).rejects.toThrow("Test error");
 
@@ -163,11 +136,6 @@ describe("SkillExecutor", () => {
     });
 
     it("should create a notification on completion if configured", async () => {
-      vi.spyOn(executor as any, "runAgentLoop").mockResolvedValue({
-        output: { message: "Done" },
-        toolCalls: [],
-      });
-
       await executor.execute(testSkill, testEvent);
 
       expect(mockNotifRepo.create).toHaveBeenCalledWith(
@@ -181,8 +149,8 @@ describe("SkillExecutor", () => {
   });
 
   describe("runAgentLoop", () => {
-    it("should return early when no API key is configured", async () => {
-      const noKeyExecutor = new SkillExecutor({ ...mockDeps, anthropicApiKey: undefined });
+    it("should return early when no engine is configured", async () => {
+      const noEngineExecutor = new SkillExecutor({ ...mockDeps, engine: undefined });
       const run = {
         id: "run_1",
         eventId: "e1",
@@ -198,22 +166,13 @@ describe("SkillExecutor", () => {
         updatedAt: Date.now(),
       };
 
-      const result = await noKeyExecutor.runAgentLoop(testSkill, testEvent, run);
+      const result = await noEngineExecutor.runAgentLoop(testSkill, testEvent, run);
 
-      expect(result.output).toEqual({ message: "No API key configured" });
+      expect(result.output).toEqual({ message: "No AI engine configured" });
       expect(result.toolCalls).toEqual([]);
     });
 
-    it("should call Anthropic API with correct model and return response", async () => {
-      // Get the mock create function
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      mockCreate.mockResolvedValueOnce({
-        content: [{ type: "text", text: "Hello from Claude" }],
-        stop_reason: "end_turn",
-      });
-
+    it("should call engine.runLoop and return response", async () => {
       const run = {
         id: "run_1",
         eventId: "e1",
@@ -233,19 +192,11 @@ describe("SkillExecutor", () => {
 
       expect(result.output).toEqual({ response: "Hello from Claude" });
       expect(result.toolCalls).toEqual([]);
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      expect(mockEngine.runLoop).toHaveBeenCalledTimes(1);
     });
-  });
 
-  describe("model selection", () => {
-    it("should use correct model ID for haiku", async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      mockCreate.mockResolvedValueOnce({
-        content: [{ type: "text", text: "Hello" }],
-        stop_reason: "end_turn",
-      });
-
+    it("should pass the correct model ID to the engine", async () => {
       const run = {
         id: "run_1",
         eventId: "e1",
@@ -263,111 +214,58 @@ describe("SkillExecutor", () => {
 
       await executor.runAgentLoop({ ...testSkill, model: "haiku", mcpServers: {} }, testEvent, run);
 
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-      expect(mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0].model).toBe(
-        "claude-haiku-4-5-20251001"
-      );
+      const callArgs = (mockEngine.runLoop as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as LoopConfig;
+      expect(callArgs.model).toBe("claude-haiku-4-5-20251001");
+    });
+  });
+
+  describe("model selection", () => {
+    const run = {
+      id: "run_1",
+      eventId: "e1",
+      skillId: "s1",
+      status: "running" as const,
+      input: "{}",
+      output: null,
+      error: null,
+      toolCalls: "[]",
+      startedAt: null,
+      completedAt: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    it("should use correct model ID for haiku", async () => {
+      await executor.runAgentLoop({ ...testSkill, model: "haiku", mcpServers: {} }, testEvent, run);
+      const callArgs = (mockEngine.runLoop as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as LoopConfig;
+      expect(callArgs.model).toBe("claude-haiku-4-5-20251001");
     });
 
     it("should use correct model ID for sonnet", async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      mockCreate.mockResolvedValueOnce({
-        content: [{ type: "text", text: "Hello" }],
-        stop_reason: "end_turn",
-      });
-
-      const run = {
-        id: "run_1",
-        eventId: "e1",
-        skillId: "s1",
-        status: "running" as const,
-        input: "{}",
-        output: null,
-        error: null,
-        toolCalls: "[]",
-        startedAt: null,
-        completedAt: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-
       await executor.runAgentLoop(
         { ...testSkill, model: "sonnet", mcpServers: {} },
         testEvent,
         run
       );
-
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-      expect(mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0].model).toBe(
-        "claude-sonnet-4-20250514"
-      );
+      const callArgs = (mockEngine.runLoop as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as LoopConfig;
+      expect(callArgs.model).toBe("claude-sonnet-4-20250514");
     });
 
     it("should use correct model ID for opus", async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      mockCreate.mockResolvedValueOnce({
-        content: [{ type: "text", text: "Hello" }],
-        stop_reason: "end_turn",
-      });
-
-      const run = {
-        id: "run_1",
-        eventId: "e1",
-        skillId: "s1",
-        status: "running" as const,
-        input: "{}",
-        output: null,
-        error: null,
-        toolCalls: "[]",
-        startedAt: null,
-        completedAt: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-
       await executor.runAgentLoop({ ...testSkill, model: "opus", mcpServers: {} }, testEvent, run);
-
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-      expect(mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0].model).toBe(
-        "claude-opus-4-20250514"
-      );
+      const callArgs = (mockEngine.runLoop as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as LoopConfig;
+      expect(callArgs.model).toBe("claude-opus-4-20250514");
     });
 
     it("should default to sonnet when no model specified", async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { __mockCreate: mockCreate } = (await import("@anthropic-ai/sdk")) as any;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      mockCreate.mockResolvedValueOnce({
-        content: [{ type: "text", text: "Hello" }],
-        stop_reason: "end_turn",
-      });
-
-      const run = {
-        id: "run_1",
-        eventId: "e1",
-        skillId: "s1",
-        status: "running" as const,
-        input: "{}",
-        output: null,
-        error: null,
-        toolCalls: "[]",
-        startedAt: null,
-        completedAt: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-
-      // testSkill doesn't have model set, so it should default to sonnet
       await executor.runAgentLoop({ ...testSkill, mcpServers: {} }, testEvent, run);
-
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-      expect(mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0].model).toBe(
-        "claude-sonnet-4-20250514"
-      );
+      const callArgs = (mockEngine.runLoop as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as LoopConfig;
+      expect(callArgs.model).toBe("claude-sonnet-4-20250514");
     });
   });
 
