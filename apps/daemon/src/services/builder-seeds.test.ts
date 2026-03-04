@@ -138,4 +138,10 @@ describe("getBuilderOrchestratorInstructions", () => {
     const output = getBuilderOrchestratorInstructions(new Map(), []);
     expect(output).toContain("No external MCP integrations are currently configured");
   });
+
+  it("contains MCP server setup guidance against building from scratch", () => {
+    const output = getBuilderOrchestratorInstructions(new Map(), []);
+    expect(output).toContain("NEVER build MCP servers from scratch");
+    expect(output).toContain("MCP Server Setup");
+  });
 });
