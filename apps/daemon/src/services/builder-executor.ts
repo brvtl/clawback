@@ -6,6 +6,7 @@ import type {
   SkillRepository,
   CheckpointRepository,
   EventRepository,
+  McpServerRepository,
 } from "@clawback/db";
 import type { SkillExecutor } from "../skills/executor.js";
 import type { NotificationService } from "./notifications.js";
@@ -20,6 +21,7 @@ export interface BuilderExecutorDependencies {
   checkpointRepo: CheckpointRepository;
   eventRepo: EventRepository;
   skillExecutor: SkillExecutor;
+  mcpServerRepo: McpServerRepository;
   builderWorkflowId: string;
   builderSkillIds: string[];
   engine?: AiEngine;
@@ -33,6 +35,7 @@ export class BuilderExecutor {
   private checkpointRepo: CheckpointRepository;
   private eventRepo: EventRepository;
   private skillExecutor: SkillExecutor;
+  private mcpServerRepo: McpServerRepository;
   private builderWorkflowId: string;
   private builderSkillIds: string[];
   private activeSessions = new Set<string>();
@@ -46,6 +49,7 @@ export class BuilderExecutor {
     this.checkpointRepo = deps.checkpointRepo;
     this.eventRepo = deps.eventRepo;
     this.skillExecutor = deps.skillExecutor;
+    this.mcpServerRepo = deps.mcpServerRepo;
     this.builderWorkflowId = deps.builderWorkflowId;
     this.builderSkillIds = deps.builderSkillIds;
     this.engine = deps.engine;
@@ -99,7 +103,32 @@ export class BuilderExecutor {
         skillMap.set(skill.name, skill.id);
       }
     }
-    return getBuilderOrchestratorInstructions(skillMap);
+    // Get MCP server names for the system prompt (excluding internal clawback server)
+    const mcpServerNames = this.mcpServerRepo
+      .findAll(true)
+      .filter((s) => s.name !== "clawback")
+      .map((s) => s.name);
+    return getBuilderOrchestratorInstructions(skillMap, mcpServerNames);
+  }
+
+  private buildMcpServersConfig(): Record<
+    string,
+    { command: string; args: string[]; env?: Record<string, string> }
+  > {
+    const servers = this.mcpServerRepo.findAll(true); // enabled only
+    const config: Record<
+      string,
+      { command: string; args: string[]; env?: Record<string, string> }
+    > = {};
+    for (const server of servers) {
+      if (server.name === "clawback") continue; // Builder skills handle Clawback API access
+      config[server.name] = {
+        command: server.command,
+        args: Array.isArray(server.args) ? server.args : [],
+        env: server.env ?? undefined,
+      };
+    }
+    return config;
   }
 
   private async runLoop(
@@ -304,7 +333,7 @@ export class BuilderExecutor {
           systemPrompt,
           messages,
           model: "claude-sonnet-4-20250514",
-          mcpServers: {},
+          mcpServers: this.buildMcpServersConfig(),
           customTools,
         },
         {
@@ -313,11 +342,34 @@ export class BuilderExecutor {
             this.broadcast(sessionId, "builder_text", { text });
             this.saveCheckpoint(workflowRunId, cpSequence++, "assistant_message", { text });
           },
-          onToolCall: (_toolName, _toolInput, _toolUseId) => {
-            // Tool calls are handled by custom tool handlers above
+          onToolCall: (toolName, toolInput, toolUseId) => {
+            // Skip custom tools — they broadcast from their own handlers
+            if (["spawn_skill", "complete_workflow", "fail_workflow"].includes(toolName)) return;
+            this.broadcast(sessionId, "builder_tool_call", {
+              tool: toolName,
+              args: toolInput,
+            });
+            this.saveCheckpoint(workflowRunId, cpSequence++, "tool_call", {
+              toolName,
+              toolInput,
+              toolUseId,
+            });
           },
-          onToolResult: (_toolName, _toolUseId, _resultText, _isError) => {
-            // Tool results are handled by custom tool handlers above
+          onToolResult: (toolName, toolUseId, resultText, isError) => {
+            if (["spawn_skill", "complete_workflow", "fail_workflow"].includes(toolName)) return;
+            const truncated =
+              resultText.length > 500 ? resultText.slice(0, 500) + "..." : resultText;
+            this.broadcast(sessionId, "builder_tool_result", {
+              tool: toolName,
+              result: truncated,
+              isError,
+            });
+            this.saveCheckpoint(workflowRunId, cpSequence++, "tool_result", {
+              toolName,
+              toolUseId,
+              result: resultText.length > 2000 ? resultText.slice(0, 2000) + "..." : resultText,
+              isError,
+            });
           },
         }
       );
