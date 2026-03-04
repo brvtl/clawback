@@ -44,7 +44,7 @@ packages/mcp-server/   - Clawback MCP server for external tool access
 All AI execution goes through the `AiEngine` interface (`apps/daemon/src/ai/types.ts`). A factory function selects the implementation based on environment variables:
 
 - `ANTHROPIC_API_KEY` set → `DirectApiEngine` — calls Anthropic API directly, per-token billing
-- `CLAUDE_CODE_OAUTH_TOKEN` set → `AgentSdkEngine` — uses Claude Agent SDK, bills against Max subscription
+- `CLAUDE_CODE_OAUTH_TOKEN` set → `AgentSdkEngine` — uses Claude Agent SDK, bills against Max subscription. The token value is only used for engine selection; the spawned `claude` CLI handles its own auth internally.
 - Neither set → AI features disabled (graceful degradation)
 
 ```
@@ -280,5 +280,6 @@ Skills/workflows reference MCP servers by name (e.g., `["github"]`). The executo
 - Use wildcard patterns for broader matching: `pull_request.*` matches `pull_request.opened`, `pull_request.closed`, etc.
 - Repository filters are case-sensitive (`brvtl/ArchDotfiles` not `brvtl/archdotfiles`)
 - Set either `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` — if neither is set, AI features are disabled
+- `CLAUDE_CODE_OAUTH_TOKEN` is only used for engine selection — the SDK engine strips it from child processes so the `claude` CLI uses its own auth from `~/.claude/.credentials.json` (which handles token refresh). Set it to any non-empty value (e.g., `use-cli-auth`) on machines where the CLI is logged in.
 - Executors never import SDK-specific code directly — always go through `AiEngine`
 - The `Event` type from the DB returns `payload: string` (JSON) but the shared type expects `Record<string, unknown>` — this is a known pre-existing type mismatch

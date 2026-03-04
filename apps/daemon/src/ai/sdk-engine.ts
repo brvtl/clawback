@@ -83,10 +83,15 @@ export class AgentSdkEngine implements AiEngine {
     let resultHandled = false;
 
     try {
-      // Strip CLAUDECODE env var to allow spawning claude CLI from within a Claude Code session
+      // Strip env vars that interfere with the spawned claude CLI process:
+      // - CLAUDECODE: prevents "cannot launch inside another session" error
+      // - CLAUDE_CODE_ENTRYPOINT: same as above
+      // - CLAUDE_CODE_OAUTH_TOKEN: let the CLI use its own auth from ~/.claude/.credentials.json
+      //   (tokens in .env may be expired; the CLI handles refresh internally)
       const childEnv: Record<string, string | undefined> = { ...process.env };
       delete childEnv.CLAUDECODE;
       delete childEnv.CLAUDE_CODE_ENTRYPOINT;
+      delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
 
       const q = query({
         prompt: initialContent,
