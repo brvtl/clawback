@@ -2,6 +2,13 @@
 
 You are a specialist agent for the Clawback web frontend (`apps/web/`). This is a SvelteKit app with Tailwind CSS that provides the UI for managing skills, workflows, events, runs, and the AI builder.
 
+## Scope Boundary
+
+- **DO NOT** modify daemon routes or services (`apps/daemon/`) — use the `daemon` agent
+- **DO NOT** modify `packages/shared/` types — use the `shared` agent
+- **DO NOT** import `@clawback/db` — the web app communicates with the daemon via REST API only
+- **DO NOT** use Svelte 5 runes (`$state`, `$derived`, `$effect`) — this is a Svelte 4 app using `$:` reactive declarations and writable stores
+
 ## Your Domain
 
 ```
@@ -70,6 +77,60 @@ The web app communicates with the daemon via REST API and WebSocket:
 | `/schedules` | Manage cron jobs (enable/disable/delete)                |
 | `/settings`  | Configure MCP servers (add/edit/remove)                 |
 
+## Code Examples
+
+### API client method
+
+```typescript
+export async function fetchSkills(): Promise<ApiSkill[]> {
+  const res = await fetch(`${API_BASE}/api/skills`);
+  if (!res.ok) throw new Error(`Failed to fetch skills: ${res.statusText}`);
+  const data = await res.json();
+  return data.skills;
+}
+```
+
+### Page component pattern
+
+```svelte
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { fetchSkills, type ApiSkill } from "$lib/api/client";
+
+  let skills: ApiSkill[] = [];
+  let loading = true;
+
+  onMount(async () => {
+    skills = await fetchSkills();
+    loading = false;
+  });
+</script>
+
+{#if loading}
+  <p>Loading...</p>
+{:else}
+  {#each skills as skill}
+    <div>{skill.name}</div>
+  {/each}
+{/if}
+```
+
+## Cross-Domain Coordination
+
+- **DO NOT** reach into other packages (`apps/daemon/`, `packages/db/`, `packages/shared/`)
+- If you need a new API endpoint, document the exact route, method, request/response shape so the coordinator can spawn a `daemon` agent
+- If you need a new shared type, document what you need — the coordinator will spawn a `shared` agent
+
+## Quality Gate
+
+Before marking your task complete, verify:
+
+1. `cd apps/web && pnpm build` — build succeeds
+2. `cd apps/web && pnpm typecheck` — no type errors
+3. `pnpm lint` — no lint errors
+4. For `src/lib/` code (stores, API client, utilities): write tests with Vitest. Run: `cd apps/web && pnpm test:run`
+5. For `.svelte` components: tests are not yet required, but manually verify UI behavior
+
 ## Dependencies
 
 - `@clawback/shared` — shared types (Skill, Event, Workflow, Run, etc.)
@@ -78,9 +139,9 @@ The web app communicates with the daemon via REST API and WebSocket:
 - `tailwindcss` — utility-first CSS
 - `vite` — build tool
 
-## Testing & Development
+## Testing
 
-- Dev server: `pnpm dev:web` (port 5173, proxies API to daemon on 3000)
-- Build: `cd apps/web && pnpm build`
+- **`src/lib/` code** (stores, API client, utilities): use Vitest. Test files go alongside source as `*.test.ts`
+- **`.svelte` components**: component tests are not yet set up. Manual verification is acceptable for now
+- Run: `cd apps/web && pnpm test:run`
 - Typecheck: `cd apps/web && pnpm typecheck`
-- No test files currently exist in the web app

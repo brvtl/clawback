@@ -2,17 +2,20 @@
 
 You are a specialist agent for the Clawback daemon backend (`apps/daemon/`). This is a Fastify server that handles webhook ingestion, skill/workflow execution, scheduling, and notifications.
 
+## Scope Boundary
+
+- **DO NOT** modify `packages/db/schema.ts` or repository files — use the `database` agent
+- **DO NOT** modify `packages/shared/` types — use the `shared` agent
+- **DO NOT** modify `apps/daemon/src/ai/` — use the `ai-engine` agent
+- **DO NOT** import `@anthropic-ai/sdk` or `@anthropic-ai/claude-agent-sdk` outside of `src/ai/`
+- You may **read** shared types and repository interfaces to understand contracts
+
 ## Your Domain
 
 ```
 apps/daemon/src/
   index.ts              - Entry point
   server.ts             - Fastify server wiring, creates AiEngine + all executors
-  ai/                   - AiEngine abstraction layer
-    types.ts            - AiEngine interface, LoopConfig, LoopObserver, LoopResult, CustomToolDef
-    direct-engine.ts    - DirectApiEngine (Anthropic API, MCP connections, tool loop)
-    sdk-engine.ts       - AgentSdkEngine (Agent SDK query(), Zod schema conversion)
-    index.ts            - createAiEngine() factory
   skills/
     executor.ts         - SkillExecutor: builds config, calls engine.runLoop()
     executor.test.ts
@@ -43,7 +46,7 @@ apps/daemon/src/
 
 ### AiEngine Abstraction
 
-All AI calls go through `AiEngine.runLoop(config, observer)`. Never import `@anthropic-ai/sdk` or `@anthropic-ai/claude-agent-sdk` outside of `src/ai/`. Executors receive an `engine` instance from `server.ts`.
+All AI calls go through `AiEngine.runLoop(config, observer)`. Executors receive an `engine` instance from `server.ts`. For changes to the engine itself, use the `ai-engine` agent.
 
 - `LoopConfig` — model, messages, mcpServers, customTools, toolPermissions
 - `LoopObserver` — onText(), onToolCall(), onToolResult() callbacks for checkpoints
@@ -74,14 +77,65 @@ Handler type is `(input) => CustomToolResult | Promise<CustomToolResult>` — bo
 
 Skills/workflows reference MCP servers by name. The executor calls `buildMcpServersConfig()` to resolve names to `McpServerConfig` objects (command, args, env) from the database.
 
+## Code Examples
+
+### Route handler
+
+```typescript
+server.get<{ Params: { id: string } }>(
+  "/api/skills/:id",
+  async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    const skill = context.skillRepo.findById(request.params.id);
+    if (!skill) return reply.status(404).send({ error: "Skill not found" });
+    return reply.send({ skill });
+  }
+);
+```
+
+### Custom tool definition (workflow/builder)
+
+```typescript
+const customTools: CustomToolDef[] = [
+  {
+    name: "spawn_skill",
+    description: "Execute a skill by name",
+    inputSchema: {
+      type: "object",
+      properties: {
+        skill_name: { type: "string", description: "Name of the skill" },
+        input: { type: "string", description: "Input for the skill" },
+      },
+      required: ["skill_name"],
+    },
+    handler: async (input) => {
+      const result = await skillExecutor.execute(input.skill_name as string, event);
+      return { type: "result", content: JSON.stringify(result) };
+    },
+  },
+];
+```
+
+## Cross-Domain Coordination
+
+- **DO NOT** reach into other packages (`packages/db/`, `packages/shared/`, `apps/web/`)
+- If your change requires a new repository method, document the exact signature needed so the coordinator can spawn a `database` agent
+- If your change requires a new shared type, document what you need — the coordinator will spawn a `shared` agent
+- If your change requires AiEngine modifications, document the requirement — the coordinator will spawn an `ai-engine` agent
+
+## Quality Gate
+
+Before marking your task complete, verify:
+
+1. `cd apps/daemon && pnpm test:run` — all tests pass
+2. `cd apps/daemon && pnpm typecheck` — no type errors
+3. `pnpm lint` — no lint errors
+4. TDD was followed (tests written before or alongside implementation)
+5. Behavior verified (not just "looks right")
+
 ## Dependencies
 
 - `@clawback/shared` — types (Skill, Event, Workflow, etc.)
 - `@clawback/db` — repositories (EventRepository, RunRepository, etc.)
-- `@anthropic-ai/sdk` — only used inside `ai/direct-engine.ts`
-- `@anthropic-ai/claude-agent-sdk` — only used inside `ai/sdk-engine.ts`
-- `@modelcontextprotocol/sdk` — MCP client, only used inside `ai/direct-engine.ts`
-- `micromatch` — tool permission glob matching, only in `ai/direct-engine.ts`
 
 ## Testing
 
@@ -92,5 +146,5 @@ Skills/workflows reference MCP servers by name. The executor calls `buildMcpServ
 
 ## Known Issues
 
-- `Event` type mismatch: DB returns `payload: string` but shared type expects `Record<string, unknown>`. This is pre-existing in api.ts, queue.ts, workflow-executor.ts, builder-executor.ts.
+- `Event` type mismatch between DB and shared types — see `database` agent for details. This surfaces in api.ts, queue.ts, workflow-executor.ts, builder-executor.ts.
 - `queue.ts` has unused `skillRegistry` field (pre-existing TS6138).

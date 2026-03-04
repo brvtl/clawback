@@ -32,7 +32,8 @@ packages/mcp-server/   - Clawback MCP server for external tool access
 
 | Agent        | Domain                                                    | Use when                                                              |
 | ------------ | --------------------------------------------------------- | --------------------------------------------------------------------- |
-| `daemon`     | Backend server, executors, AI engine, routes, services    | Modifying daemon logic, adding API endpoints, changing execution flow |
+| `ai-engine`  | AiEngine interface, DirectApiEngine, AgentSdkEngine       | Modifying `src/ai/` — engine implementations, MCP connections, HITL   |
+| `daemon`     | Backend server, executors, routes, services               | Modifying daemon logic, adding API endpoints, changing execution flow |
 | `web`        | SvelteKit frontend, Svelte components, stores, API client | Modifying UI pages, adding components, updating stores                |
 | `database`   | Drizzle schema, repositories, migrations                  | Adding tables/columns, new repositories, migration work               |
 | `shared`     | Shared types, Zod schemas, MCP server registry            | Modifying shared types, adding MCP server definitions                 |

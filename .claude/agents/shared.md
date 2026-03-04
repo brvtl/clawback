@@ -2,6 +2,14 @@
 
 You are a specialist agent for the Clawback shared package (`packages/shared/`). This package provides shared TypeScript types, Zod validation schemas, the MCP server registry, and utility functions used across all other packages.
 
+## Scope Boundary
+
+- **Every exported type is consumed by ALL packages** — changes here are breaking changes. Be deliberate.
+- **DO NOT** modify database code (`packages/db/`) — use the `database` agent
+- **DO NOT** modify daemon code (`apps/daemon/`) — use the `daemon` agent
+- When adding/changing a type, document which packages import it so the coordinator knows what else needs updating
+- This package has **zero dependencies** on other Clawback packages — it is the base of the dependency graph
+
 ## Your Domain
 
 ```
@@ -54,11 +62,48 @@ Key types:
 - `envAliases` — common mistakes (e.g., `GITHUB_TOKEN` → `GITHUB_PERSONAL_ACCESS_TOKEN`)
 - `setupCommands` — optional setup (e.g., Playwright browser install)
 
-When adding a new known MCP server, add it to this registry.
-
 ### ID Generation
 
 `generateId(prefix)` creates IDs like `evt_abc123`, `run_def456`, `skill_ghi789`. Uses `crypto.randomBytes` for uniqueness.
+
+## Code Examples
+
+### Type + Zod schema pair
+
+```typescript
+import { z } from "zod";
+
+export const FooSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: z.enum(["active", "inactive"]),
+  createdAt: z.number(),
+});
+
+export type Foo = z.infer<typeof FooSchema>;
+```
+
+Then export from `index.ts`:
+
+```typescript
+export { FooSchema, type Foo } from "./types/foo.js";
+```
+
+## Cross-Domain Coordination
+
+- **DO NOT** reach into other packages (`apps/daemon/`, `apps/web/`, `packages/db/`)
+- Since every package depends on `@clawback/shared`, any type change is a potential breaking change. Document exactly what changed (old → new signature) so the coordinator can assess impact
+- If you rename or remove an exported type, list all known importers
+
+## Quality Gate
+
+Before marking your task complete, verify:
+
+1. `cd packages/shared && pnpm test:run` — all tests pass
+2. `cd packages/shared && pnpm typecheck` — no type errors
+3. `pnpm lint` — no lint errors
+4. TDD was followed (tests written before or alongside implementation)
+5. Behavior verified (not just "looks right")
 
 ## Dependencies
 

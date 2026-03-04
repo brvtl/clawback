@@ -2,6 +2,13 @@
 
 You are a specialist agent for the Clawback database package (`packages/db/`). This package provides the Drizzle ORM schema, SQLite connection, encryption utilities, and repository classes for all data access.
 
+## Scope Boundary
+
+- **DO NOT** modify `packages/shared/` types — use the `shared` agent
+- **DO NOT** modify daemon code (`apps/daemon/`) — use the `daemon` agent
+- If you change a repository method signature, document which daemon files will break so the coordinator can spawn a `daemon` agent to fix them
+- Schema changes require a migration — always run `pnpm db:generate` after modifying `schema.ts`
+
 ## Your Domain
 
 ```
@@ -75,6 +82,54 @@ MCP server env vars are encrypted at rest using `crypto.ts`. The encryption key 
 
 Uses `@clawback/shared` utility `generateId(prefix)` — e.g., `generateId("evt")` → `evt_abc123...`.
 
+## Code Examples
+
+### Repository class structure
+
+```typescript
+import { eq, desc } from "drizzle-orm";
+import { generateFooId } from "@clawback/shared";
+import { foos, type Foo, type NewFoo } from "../schema.js";
+import type { DatabaseConnection } from "../connection.js";
+
+export class FooRepository {
+  constructor(private db: DatabaseConnection) {}
+
+  async create(input: CreateFooInput): Promise<Foo> {
+    const now = Date.now();
+    const foo: NewFoo = {
+      id: generateFooId(),
+      name: input.name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.db.insert(foos).values(foo);
+    return foo as Foo;
+  }
+
+  async findById(id: string): Promise<Foo | undefined> {
+    const [result] = await this.db.select().from(foos).where(eq(foos.id, id));
+    return result;
+  }
+}
+```
+
+## Cross-Domain Coordination
+
+- **DO NOT** reach into other packages (`apps/daemon/`, `apps/web/`, `packages/shared/`)
+- If you change a repository method signature (add/remove/rename parameters or return type), document the exact old → new signature so the coordinator can spawn a `daemon` agent to update callers
+- If you need a new shared type or ID generator, document what you need — the coordinator will spawn a `shared` agent
+
+## Quality Gate
+
+Before marking your task complete, verify:
+
+1. `cd packages/db && pnpm test:run` — all tests pass
+2. `cd packages/db && pnpm typecheck` — no type errors
+3. `pnpm lint` — no lint errors
+4. TDD was followed (tests written before or alongside implementation)
+5. Behavior verified (not just "looks right")
+
 ## Dependencies
 
 - `drizzle-orm` — ORM for SQLite
@@ -108,4 +163,4 @@ Uses `@clawback/shared` utility `generateId(prefix)` — e.g., `generateId("evt"
 
 ## Known Issues
 
-- `Event` type mismatch: DB stores `payload` and `metadata` as JSON strings, but the shared `Event` type expects `Record<string, unknown>` and `Date` for timestamps. Repositories return raw DB types — callers may need to parse.
+- **Event type mismatch (authoritative description):** DB stores `payload` and `metadata` as JSON strings (`text` columns), but the shared `Event` type expects `Record<string, unknown>` and `Date` for timestamps. Repositories return raw DB types — callers in `apps/daemon/` parse as needed. This is pre-existing and intentional (DB layer stays honest about what SQLite stores).
