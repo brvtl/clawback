@@ -18,6 +18,10 @@ export interface KnownMcpServer {
   optionalEnv?: string[];
   /** Common mistakes to check for */
   envAliases?: Record<string, string>; // wrong name -> correct name
+  /** Short description of what this server provides */
+  description?: string;
+  /** Instructions for obtaining credentials */
+  credentialHelp?: string;
 }
 
 export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
@@ -32,6 +36,8 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
       GH_TOKEN: "GITHUB_PERSONAL_ACCESS_TOKEN",
       GITHUB_PAT: "GITHUB_PERSONAL_ACCESS_TOKEN",
     },
+    description: "GitHub API access — repos, issues, PRs, actions",
+    credentialHelp: "Create a personal access token at https://github.com/settings/tokens",
   },
   {
     package: "@modelcontextprotocol/server-filesystem",
@@ -50,6 +56,9 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
     envAliases: {
       SLACK_TOKEN: "SLACK_BOT_TOKEN",
     },
+    description: "Slack API access — messages, channels, users",
+    credentialHelp:
+      "Create a Slack app at https://api.slack.com/apps and get a Bot User OAuth Token (xoxb-...)",
   },
   {
     package: "@modelcontextprotocol/server-postgres",
@@ -61,6 +70,8 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
       DATABASE_URL: "POSTGRES_CONNECTION_STRING",
       POSTGRES_URL: "POSTGRES_CONNECTION_STRING",
     },
+    description: "PostgreSQL database access — queries, schema inspection",
+    credentialHelp: "Connection string format: postgresql://user:password@host:5432/dbname",
   },
   {
     package: "@modelcontextprotocol/server-sqlite",
@@ -68,6 +79,8 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-sqlite"],
     requiredEnv: ["SQLITE_DB_PATH"],
+    description: "SQLite database access — queries, schema inspection",
+    credentialHelp: "Provide the path to your .db file",
   },
   {
     package: "mcp-server-fetch",
@@ -86,6 +99,50 @@ export const KNOWN_MCP_SERVERS: KnownMcpServer[] = [
       ONEPASSWORD_TOKEN: "OP_SERVICE_ACCOUNT_TOKEN",
       OP_TOKEN: "OP_SERVICE_ACCOUNT_TOKEN",
       "1PASSWORD_TOKEN": "OP_SERVICE_ACCOUNT_TOKEN",
+    },
+    description: "1Password secret management — read vault items",
+    credentialHelp:
+      "Create a service account at https://my.1password.com/developer/service-accounts",
+  },
+  {
+    package: "mcp-mail-server",
+    displayName: "Email (IMAP/SMTP)",
+    command: "npx",
+    args: ["-y", "mcp-mail-server"],
+    requiredEnv: [
+      "IMAP_HOST",
+      "IMAP_PORT",
+      "IMAP_SECURE",
+      "SMTP_HOST",
+      "SMTP_PORT",
+      "SMTP_SECURE",
+      "EMAIL_USER",
+      "EMAIL_PASS",
+    ],
+    description:
+      "Email access via IMAP/SMTP — read, send, search emails. Works with Gmail (app password), Outlook, or any IMAP provider.",
+    credentialHelp:
+      "For Gmail: enable 2FA, then create an app password at https://myaccount.google.com/apppasswords. Set EMAIL_USER to your Gmail address and EMAIL_PASS to the app password.",
+  },
+  {
+    package: "dkmaker-mcp-rest-api",
+    displayName: "REST API",
+    command: "npx",
+    args: ["-y", "dkmaker-mcp-rest-api"],
+    requiredEnv: ["REST_BASE_URL"],
+    optionalEnv: [
+      "AUTH_BEARER",
+      "AUTH_BASIC_USERNAME",
+      "AUTH_BASIC_PASSWORD",
+      "AUTH_APIKEY_HEADER_NAME",
+      "AUTH_APIKEY_VALUE",
+    ],
+    description: "Generic REST API access — call any HTTP API with configurable auth",
+    credentialHelp:
+      "Set REST_BASE_URL to the API base URL. For auth, set AUTH_BEARER for Bearer tokens, or AUTH_BASIC_USERNAME + AUTH_BASIC_PASSWORD for Basic auth.",
+    envAliases: {
+      BASE_URL: "REST_BASE_URL",
+      BEARER_TOKEN: "AUTH_BEARER",
     },
   },
 ];

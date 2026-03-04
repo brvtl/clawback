@@ -5,7 +5,7 @@ import { SkillRepository, createTestConnection } from "@clawback/db";
 const EXPECTED_SKILL_NAMES = [
   "Builder: Query System",
   "Builder: Research",
-  "Builder: Create MCP Server",
+  "Builder: Setup Integration",
   "Builder: Create Skill",
   "Builder: Create Workflow",
 ];
@@ -81,67 +81,109 @@ describe("seedBuilderSkills", () => {
       expect(result).toBe(false);
     }
   });
+
+  it("Setup Integration skill uses clawback MCP server", () => {
+    seedBuilderSkills(skillRepo);
+    const skill = skillRepo.findBuiltin("Builder: Setup Integration");
+    expect(skill).toBeDefined();
+    expect(skill!.mcpServers).toContain("clawback");
+  });
+
+  it("renames old skill name to new name preserving ID", () => {
+    // Create a skill with the old name
+    const oldSkill = skillRepo.createBuiltin({
+      name: "Builder: Create MCP Server",
+      description: "old desc",
+      instructions: "old instructions",
+      mcpServers: ["clawback"],
+      toolPermissions: { allow: [], deny: [] },
+      model: "sonnet",
+    });
+    const oldId = oldSkill.id;
+
+    // Seed should rename it
+    const skillMap = seedBuilderSkills(skillRepo);
+    const newId = skillMap.get("Builder: Setup Integration");
+
+    expect(newId).toBe(oldId);
+    expect(skillRepo.findBuiltin("Builder: Create MCP Server")).toBeUndefined();
+    expect(skillRepo.findBuiltin("Builder: Setup Integration")).toBeDefined();
+  });
 });
 
 describe("getBuilderOrchestratorInstructions", () => {
   it("contains injected skill IDs", () => {
     const skillMap = new Map([["Builder: Query System", "skill_abc"]]);
-    const output = getBuilderOrchestratorInstructions(skillMap, []);
+    const output = getBuilderOrchestratorInstructions(skillMap, new Map());
     expect(output).toContain("skill_abc");
   });
 
   it("contains skill names", () => {
     const skillMap = new Map([["Builder: Query System", "skill_abc"]]);
-    const output = getBuilderOrchestratorInstructions(skillMap, []);
+    const output = getBuilderOrchestratorInstructions(skillMap, new Map());
     expect(output).toContain("Builder: Query System");
   });
 
   it("contains spawn_skill reference", () => {
     const skillMap = new Map([["Builder: Query System", "skill_abc"]]);
-    const output = getBuilderOrchestratorInstructions(skillMap, []);
+    const output = getBuilderOrchestratorInstructions(skillMap, new Map());
     expect(output).toContain("spawn_skill");
   });
 
   it("contains complete_workflow reference", () => {
     const skillMap = new Map([["Builder: Query System", "skill_abc"]]);
-    const output = getBuilderOrchestratorInstructions(skillMap, []);
+    const output = getBuilderOrchestratorInstructions(skillMap, new Map());
     expect(output).toContain("complete_workflow");
   });
 
   it("contains credential handling guidance", () => {
     const skillMap = new Map([["Builder: Query System", "skill_abc"]]);
-    const output = getBuilderOrchestratorInstructions(skillMap, []);
+    const output = getBuilderOrchestratorInstructions(skillMap, new Map());
     expect(output).toContain("Credential Handling");
   });
 
   it("returns non-empty string when passed empty map", () => {
-    const output = getBuilderOrchestratorInstructions(new Map(), []);
+    const output = getBuilderOrchestratorInstructions(new Map(), new Map());
     expect(typeof output).toBe("string");
     expect(output.length).toBeGreaterThan(0);
   });
 
   it("contains Clawback concepts section", () => {
     const skillMap = new Map([["Builder: Query System", "skill_abc"]]);
-    const output = getBuilderOrchestratorInstructions(skillMap, []);
+    const output = getBuilderOrchestratorInstructions(skillMap, new Map());
     expect(output).toContain("Clawback Concepts");
   });
 
-  it("lists MCP server names when provided", () => {
+  it("lists MCP server names and tool names when provided", () => {
     const skillMap = new Map([["Builder: Query System", "skill_abc"]]);
-    const output = getBuilderOrchestratorInstructions(skillMap, ["github", "slack"]);
+    const mcpTools = new Map([
+      ["github", ["mcp__github__list_pull_requests", "mcp__github__create_issue"]],
+      ["slack", ["mcp__slack__post_message"]],
+    ]);
+    const output = getBuilderOrchestratorInstructions(skillMap, mcpTools);
     expect(output).toContain("github");
     expect(output).toContain("slack");
+    expect(output).toContain("mcp__github__list_pull_requests");
+    expect(output).toContain("mcp__slack__post_message");
     expect(output).toContain("Direct Tool Access");
   });
 
+  it("lists server name without tools when tools array is empty", () => {
+    const mcpTools = new Map([["email", [] as string[]]]);
+    const output = getBuilderOrchestratorInstructions(new Map(), mcpTools);
+    expect(output).toContain("**email**");
+    expect(output).not.toContain("No external MCP integrations");
+  });
+
   it("shows no-integrations message when no MCP servers", () => {
-    const output = getBuilderOrchestratorInstructions(new Map(), []);
+    const output = getBuilderOrchestratorInstructions(new Map(), new Map());
     expect(output).toContain("No external MCP integrations are currently configured");
   });
 
-  it("contains MCP server setup guidance against building from scratch", () => {
-    const output = getBuilderOrchestratorInstructions(new Map(), []);
-    expect(output).toContain("NEVER build MCP servers from scratch");
+  it("contains MCP server setup guidance with curated integrations", () => {
+    const output = getBuilderOrchestratorInstructions(new Map(), new Map());
     expect(output).toContain("MCP Server Setup");
+    expect(output).toContain("Builder: Setup Integration");
+    expect(output).toContain("curated list of supported integrations");
   });
 });
