@@ -168,12 +168,14 @@ describe("McpServerRepository", () => {
       // Servers with no requiredEnv should be seeded
       expect(repo.findByName("filesystem")).toBeDefined();
       expect(repo.findByName("fetch")).toBeDefined();
-      expect(repo.findByName("playwright")).toBeDefined();
 
       // Servers with requiredEnv should NOT be seeded
       expect(repo.findByName("github")).toBeUndefined();
       expect(repo.findByName("slack")).toBeUndefined();
       expect(repo.findByName("postgresql")).toBeUndefined();
+
+      // Playwright is not in the registry
+      expect(repo.findByName("playwright")).toBeUndefined();
     });
 
     it("should be idempotent - calling twice does not duplicate entries", () => {
