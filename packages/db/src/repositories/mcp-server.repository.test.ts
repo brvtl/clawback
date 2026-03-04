@@ -162,12 +162,18 @@ describe("McpServerRepository", () => {
   });
 
   describe("seedKnownServers", () => {
-    it("should create entries for known servers when the db is empty", () => {
+    it("should only seed servers that require no credentials", () => {
       repo.seedKnownServers();
 
-      expect(repo.findByName("github")).toBeDefined();
+      // Servers with no requiredEnv should be seeded
+      expect(repo.findByName("filesystem")).toBeDefined();
       expect(repo.findByName("fetch")).toBeDefined();
-      expect(repo.findByName("slack")).toBeDefined();
+      expect(repo.findByName("playwright")).toBeDefined();
+
+      // Servers with requiredEnv should NOT be seeded
+      expect(repo.findByName("github")).toBeUndefined();
+      expect(repo.findByName("slack")).toBeUndefined();
+      expect(repo.findByName("postgresql")).toBeUndefined();
     });
 
     it("should be idempotent - calling twice does not duplicate entries", () => {
@@ -183,16 +189,16 @@ describe("McpServerRepository", () => {
     it("should restore command and args from the registry if they were changed", () => {
       repo.seedKnownServers();
 
-      const github = repo.findByName("github");
-      expect(github).toBeDefined();
+      const filesystem = repo.findByName("filesystem");
+      expect(filesystem).toBeDefined();
 
-      repo.update(github!.id, { command: "tampered-command", args: ["tampered-arg"] });
+      repo.update(filesystem!.id, { command: "tampered-command", args: ["tampered-arg"] });
 
       repo.seedKnownServers();
 
-      const restored = repo.findByName("github");
+      const restored = repo.findByName("filesystem");
       expect(restored?.command).toBe("npx");
-      expect(restored?.args).toEqual(["-y", "@modelcontextprotocol/server-github"]);
+      expect(restored?.args).toEqual(["-y", "@modelcontextprotocol/server-filesystem"]);
     });
   });
 
