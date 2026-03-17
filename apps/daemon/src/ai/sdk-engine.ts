@@ -64,13 +64,19 @@ export class AgentSdkEngine implements AiEngine {
       });
     }
 
-    // Build allowed tools list from permissions
-    const allowedTools: string[] = [];
+    // Build allowed tools list from permissions.
+    // When toolPermissions is not set, pass undefined to allow all tools.
+    // When set, include explicit allows plus custom tools wildcard.
+    let allowedTools: string[] | undefined;
     if (config.toolPermissions?.allow && config.toolPermissions.allow.length > 0) {
-      allowedTools.push(...config.toolPermissions.allow);
-    }
-    if (config.customTools && config.customTools.length > 0) {
-      allowedTools.push("mcp__clawback-custom__*");
+      allowedTools = [...config.toolPermissions.allow];
+      if (config.customTools && config.customTools.length > 0) {
+        allowedTools.push("mcp__clawback-custom__*");
+      }
+    } else if (config.customTools && config.customTools.length > 0) {
+      // No explicit permissions — allow all tools (undefined = allow-all).
+      // Custom tools are accessible via the clawback-custom MCP server automatically.
+      allowedTools = undefined;
     }
 
     // Build the initial message from config.messages
@@ -105,7 +111,7 @@ export class AgentSdkEngine implements AiEngine {
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
           maxTurns: config.maxTurns ?? 10,
-          allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+          allowedTools,
           env: childEnv,
           abortController,
         },

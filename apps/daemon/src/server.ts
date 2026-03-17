@@ -118,7 +118,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Bootstrap built-in builder workflow
   let builderWorkflow = workflowRepo.findBuiltin("AI Builder");
-  const builderInstructions = getBuilderOrchestratorInstructions(builderSkillMap);
+  // Static instructions for the workflow DB record (tools discovered dynamically at runtime)
+  const builderInstructions = getBuilderOrchestratorInstructions(builderSkillMap, new Map());
   if (!builderWorkflow) {
     builderWorkflow = workflowRepo.createBuiltin({
       name: "AI Builder",
@@ -204,6 +205,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skillRepo,
     checkpointRepo,
     eventRepo,
+    mcpServerRepo,
     skillExecutor,
     builderWorkflowId: builderWorkflow.id,
     builderSkillIds,

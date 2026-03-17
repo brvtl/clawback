@@ -47,12 +47,12 @@
 </script>
 
 <svelte:head>
-  <title>Automation Builder | Clawback</title>
+  <title>Assistant | Clawback</title>
 </svelte:head>
 
 <div class="flex flex-col h-[calc(100vh-2rem)] p-4">
   <div class="flex items-center justify-between mb-4">
-    <h1 class="text-2xl font-bold">Automation Builder</h1>
+    <h1 class="text-2xl font-bold">Assistant</h1>
     <div class="flex items-center gap-3">
       {#if $builderStore.sessionId}
         <span class="text-xs text-gray-500 font-mono">{$builderStore.sessionId}</span>
@@ -75,20 +75,23 @@
       <div class="flex justify-start">
         <div class="max-w-[80%] rounded-lg p-4 bg-gray-800 text-gray-100">
           <div class="prose prose-invert prose-sm max-w-none">
-            <p>Welcome to the Automation Builder! I can help you:</p>
+            <p>
+              Hi! I'm your AI assistant with direct access to your configured integrations. I can:
+            </p>
             <ul>
-              <li><strong>Create skills</strong> - Single-purpose automations with MCP tools</li>
               <li>
-                <strong>Create workflows</strong> - AI-orchestrated multi-skill automations
+                <strong>Take actions</strong> — query repos, post messages, manage issues, and more using
+                your connected tools
               </li>
               <li>
-                <strong>Configure MCP servers</strong> - Set up GitHub, Slack, or other integrations
+                <strong>Answer questions</strong> — about your projects, code, or anything else
               </li>
               <li>
-                <strong>Update existing automations</strong> - Modify triggers, instructions, or permissions
+                <strong>Create automations</strong> — build skills and workflows when you want to automate
+                recurring tasks
               </li>
             </ul>
-            <p>What would you like to build today?</p>
+            <p>What can I help you with?</p>
           </div>
         </div>
       </div>
@@ -149,7 +152,7 @@
     <textarea
       bind:value={input}
       on:keydown={handleKeydown}
-      placeholder="Describe what you want to build..."
+      placeholder="Ask anything or describe what you want to build..."
       rows="2"
       disabled={$builderStore.loading}
       class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white resize-none focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"

@@ -135,11 +135,14 @@ export class McpServerRepository {
 
   /**
    * Seed known MCP servers from the registry if they don't already exist.
-   * Called at startup so common servers are always visible in settings.
+   * Only seeds servers that require no credentials (e.g., filesystem, playwright, fetch).
+   * Servers that need API keys/tokens are created on demand when the user configures them.
    */
   seedKnownServers(): void {
     for (const known of KNOWN_MCP_SERVERS) {
-      // Use the display name lowercased as the server name (e.g., "GitHub" -> "github")
+      // Skip servers that require credentials
+      if (known.requiredEnv.length > 0) continue;
+
       const name = known.displayName.toLowerCase().replace(/\s+/g, "-");
       const existing = this.findByName(name);
       if (!existing) {

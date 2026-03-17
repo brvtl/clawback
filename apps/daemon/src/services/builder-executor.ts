@@ -6,11 +6,13 @@ import type {
   SkillRepository,
   CheckpointRepository,
   EventRepository,
+  McpServerRepository,
 } from "@clawback/db";
 import type { SkillExecutor } from "../skills/executor.js";
 import type { NotificationService } from "./notifications.js";
 import { getBuilderOrchestratorInstructions } from "./builder-seeds.js";
 import type { AiEngine, CustomToolDef } from "../ai/types.js";
+import { discoverServerTools, type McpToolInfo } from "../mcp/tools.js";
 
 export interface BuilderExecutorDependencies {
   builderSessionRepo: BuilderSessionRepository;
@@ -20,6 +22,7 @@ export interface BuilderExecutorDependencies {
   checkpointRepo: CheckpointRepository;
   eventRepo: EventRepository;
   skillExecutor: SkillExecutor;
+  mcpServerRepo: McpServerRepository;
   builderWorkflowId: string;
   builderSkillIds: string[];
   engine?: AiEngine;
@@ -33,10 +36,12 @@ export class BuilderExecutor {
   private checkpointRepo: CheckpointRepository;
   private eventRepo: EventRepository;
   private skillExecutor: SkillExecutor;
+  private mcpServerRepo: McpServerRepository;
   private builderWorkflowId: string;
   private builderSkillIds: string[];
   private activeSessions = new Set<string>();
   private engine?: AiEngine;
+  private toolCache = new Map<string, McpToolInfo[]>();
 
   constructor(deps: BuilderExecutorDependencies) {
     this.builderSessionRepo = deps.builderSessionRepo;
@@ -46,6 +51,7 @@ export class BuilderExecutor {
     this.checkpointRepo = deps.checkpointRepo;
     this.eventRepo = deps.eventRepo;
     this.skillExecutor = deps.skillExecutor;
+    this.mcpServerRepo = deps.mcpServerRepo;
     this.builderWorkflowId = deps.builderWorkflowId;
     this.builderSkillIds = deps.builderSkillIds;
     this.engine = deps.engine;
@@ -90,7 +96,7 @@ export class BuilderExecutor {
     });
   }
 
-  private buildSystemPrompt(): string {
+  private async buildSystemPrompt(): Promise<string> {
     // Resolve available builder skills from IDs
     const skillMap = new Map<string, string>();
     for (const id of this.builderSkillIds) {
@@ -99,7 +105,60 @@ export class BuilderExecutor {
         skillMap.set(skill.name, skill.id);
       }
     }
-    return getBuilderOrchestratorInstructions(skillMap);
+
+    // Get MCP server configs and discover tools for each
+    const serverConfigs = this.buildMcpServersConfig();
+    const mcpServerTools = new Map<string, string[]>();
+
+    // Discover tools for servers not yet in cache
+    const uncachedServers = Object.entries(serverConfigs).filter(
+      ([name]) => !this.toolCache.has(name)
+    );
+    if (uncachedServers.length > 0) {
+      const discoveries = await Promise.all(
+        uncachedServers.map(async ([name, config]) => {
+          const tools = await discoverServerTools(name, config);
+          return { name, tools };
+        })
+      );
+      for (const { name, tools } of discoveries) {
+        this.toolCache.set(name, tools);
+        if (tools.length > 0) {
+          console.log(`[BuilderExecutor] Discovered ${tools.length} tools from ${name} server`);
+        }
+      }
+    }
+
+    // Build namespaced tool name map from cache
+    for (const serverName of Object.keys(serverConfigs)) {
+      const cached = this.toolCache.get(serverName) ?? [];
+      mcpServerTools.set(
+        serverName,
+        cached.map((t) => `mcp__${serverName}__${t.name}`)
+      );
+    }
+
+    return getBuilderOrchestratorInstructions(skillMap, mcpServerTools);
+  }
+
+  private buildMcpServersConfig(): Record<
+    string,
+    { command: string; args: string[]; env?: Record<string, string> }
+  > {
+    const servers = this.mcpServerRepo.findAll(true); // enabled only
+    const config: Record<
+      string,
+      { command: string; args: string[]; env?: Record<string, string> }
+    > = {};
+    for (const server of servers) {
+      if (server.name === "clawback") continue; // Builder skills handle Clawback API access
+      config[server.name] = {
+        command: server.command,
+        args: Array.isArray(server.args) ? server.args : [],
+        env: server.env ?? undefined,
+      };
+    }
+    return config;
   }
 
   private async runLoop(
@@ -116,8 +175,8 @@ export class BuilderExecutor {
       .map((id) => this.skillRepo.findById(id))
       .filter((s): s is Skill => s !== undefined);
 
-    // Build system prompt dynamically from DB
-    const systemPrompt = this.buildSystemPrompt();
+    // Build system prompt dynamically from DB (discovers MCP tools on first call)
+    const systemPrompt = await this.buildSystemPrompt();
 
     // Create event + workflow run for observability
     const event = await this.eventRepo.create({
@@ -304,7 +363,7 @@ export class BuilderExecutor {
           systemPrompt,
           messages,
           model: "claude-sonnet-4-20250514",
-          mcpServers: {},
+          mcpServers: this.buildMcpServersConfig(),
           customTools,
         },
         {
@@ -313,11 +372,34 @@ export class BuilderExecutor {
             this.broadcast(sessionId, "builder_text", { text });
             this.saveCheckpoint(workflowRunId, cpSequence++, "assistant_message", { text });
           },
-          onToolCall: (_toolName, _toolInput, _toolUseId) => {
-            // Tool calls are handled by custom tool handlers above
+          onToolCall: (toolName, toolInput, toolUseId) => {
+            // Skip custom tools — they broadcast from their own handlers
+            if (["spawn_skill", "complete_workflow", "fail_workflow"].includes(toolName)) return;
+            this.broadcast(sessionId, "builder_tool_call", {
+              tool: toolName,
+              args: toolInput,
+            });
+            this.saveCheckpoint(workflowRunId, cpSequence++, "tool_call", {
+              toolName,
+              toolInput,
+              toolUseId,
+            });
           },
-          onToolResult: (_toolName, _toolUseId, _resultText, _isError) => {
-            // Tool results are handled by custom tool handlers above
+          onToolResult: (toolName, toolUseId, resultText, isError) => {
+            if (["spawn_skill", "complete_workflow", "fail_workflow"].includes(toolName)) return;
+            const truncated =
+              resultText.length > 500 ? resultText.slice(0, 500) + "..." : resultText;
+            this.broadcast(sessionId, "builder_tool_result", {
+              tool: toolName,
+              result: truncated,
+              isError,
+            });
+            this.saveCheckpoint(workflowRunId, cpSequence++, "tool_result", {
+              toolName,
+              toolUseId,
+              result: resultText.length > 2000 ? resultText.slice(0, 2000) + "..." : resultText,
+              isError,
+            });
           },
         }
       );
