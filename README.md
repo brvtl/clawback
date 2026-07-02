@@ -54,7 +54,7 @@ Event-driven Claude automation engine. Receives webhook events, routes them to A
 
 ### Prerequisites
 
-- Node.js 20+ (use [asdf](https://asdf-vm.com/) with `.tool-versions`)
+- Node.js 20+ (use [mise](https://mise.jdx.dev/) with `.tool-versions`)
 - pnpm 9+
 - Anthropic API key **or** Claude Code OAuth token
 
